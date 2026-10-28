@@ -24,20 +24,23 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Versions demandées par Portal 2 (docs/steam.md), identiques aux accesseurs du SDK 1.53a.
+# Versions demandées par Half-Life 2 (SDK 1.60, Steamworks.NET 2024.8.0), identiques aux
+# accesseurs de la libsteam_api.dylib livrée avec Half-Life 2 pour macOS.
 VERSIONS = {
-    'ISteamClient': 'SteamClient020', 'ISteamUser': 'SteamUser021', 'ISteamFriends': 'SteamFriends017',
+    'ISteamClient': 'SteamClient021', 'ISteamUser': 'SteamUser023', 'ISteamFriends': 'SteamFriends017',
     'ISteamUtils': 'SteamUtils010', 'ISteamMatchmaking': 'SteamMatchMaking009',
     'ISteamGameSearch': 'SteamMatchGameSearch001', 'ISteamMatchmakingServers': 'SteamMatchMakingServers002',
+    'ISteamParties': 'SteamParties002',
     'ISteamUserStats': 'STEAMUSERSTATS_INTERFACE_VERSION012', 'ISteamApps': 'STEAMAPPS_INTERFACE_VERSION008',
     'ISteamNetworking': 'SteamNetworking006', 'ISteamRemoteStorage': 'STEAMREMOTESTORAGE_INTERFACE_VERSION016',
     'ISteamScreenshots': 'STEAMSCREENSHOTS_INTERFACE_VERSION003', 'ISteamHTTP': 'STEAMHTTP_INTERFACE_VERSION003',
-    'ISteamController': 'SteamController008', 'ISteamUGC': 'STEAMUGC_INTERFACE_VERSION016',
-    'ISteamAppList': 'STEAMAPPLIST_INTERFACE_VERSION001', 'ISteamMusic': 'STEAMMUSIC_INTERFACE_VERSION001',
+    'ISteamController': 'SteamController008', 'ISteamUGC': 'STEAMUGC_INTERFACE_VERSION020',
+    'ISteamMusic': 'STEAMMUSIC_INTERFACE_VERSION001',
     'ISteamMusicRemote': 'STEAMMUSICREMOTE_INTERFACE_VERSION001',
     'ISteamHTMLSurface': 'STEAMHTMLSURFACE_INTERFACE_VERSION_005', 'ISteamInventory': 'STEAMINVENTORY_INTERFACE_V003',
-    'ISteamVideo': 'STEAMVIDEO_INTERFACE_V002', 'ISteamParentalSettings': 'STEAMPARENTALSETTINGS_INTERFACE_VERSION001',
-    'ISteamInput': 'SteamInput006', 'ISteamGameServer': 'SteamGameServer014',
+    'ISteamVideo': 'STEAMVIDEO_INTERFACE_V007', 'ISteamParentalSettings': 'STEAMPARENTALSETTINGS_INTERFACE_VERSION001',
+    'ISteamRemotePlay': 'STEAMREMOTEPLAY_INTERFACE_VERSION002', 'ISteamTimeline': 'STEAMTIMELINE_INTERFACE_V001',
+    'ISteamInput': 'SteamInput006', 'ISteamGameServer': 'SteamGameServer015',
     'ISteamGameServerStats': 'SteamGameServerStats001',
 }
 # Scalaires C# -> (type C, octets sur la pile i386).
@@ -78,7 +81,7 @@ def natural_size(scalar):
     return {'bool': 1, 'int8_t': 1, 'uint8_t': 1, 'int16_t': 2, 'uint16_t': 2}.get(scalar[0], scalar[1])
 
 
-SIZE_NAME = re.compile(r'^(cub|cb|cch|un?Max|c[A-Z]|n\w*Size|\w*BufferSize|\w*Max\w*|\w*Count\w*|un\w*Size\w*)')
+SIZE_NAME = re.compile(r'^(cub|cb|cch|un?Max|unNum\w*|c[A-Z]|n\w*Size|\w*BufferSize|\w*Max\w*|\w*Count\w*|un\w*Size\w*)')
 
 
 def sdk_files(pkg):
@@ -299,8 +302,8 @@ def generate(pkg, dylib):
             methods.append(entry)
         stats[version] = (len(own), sum(('body' in m or 'fn' in m) for m in methods if m['iface'] == len(interfaces) - 1), count)
     methods.sort(key=lambda m: m['name'])
-    out = ['/* Généré par tools/gen_steam.py depuis la libsteam_api.dylib officielle (SDK 1.53a) et',
-           ' * Steamworks.NET 20.1.0 (MIT). Ne pas modifier : relancer le générateur. */',
+    out = ['/* Généré par tools/gen_steam.py depuis la libsteam_api.dylib officielle (SDK 1.60) et',
+           ' * Steamworks.NET 2024.8.0 (MIT). Ne pas modifier : relancer le générateur. */',
            '#include "steam.h"', '']
     out.extend(f'void {fn}(CPU *c, void *self, uint32_t args, uint32_t sret);' for fn in sorted(set(MANUAL.values())))
     for index, m in enumerate(methods):

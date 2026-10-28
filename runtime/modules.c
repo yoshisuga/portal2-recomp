@@ -37,6 +37,13 @@ const GuestModule *rt_find_module(const char *name) {
         if (!strcmp(rt_modules[i].name, base)) return &rt_modules[i];
     return NULL;
 }
+// Programme principal : le seul module qui n'est pas une bibliothèque
+// (portal2_linux, hl2_linux).
+const GuestModule *rt_program_module(void) {
+    for (size_t i = 0; i < rt_module_count; ++i)
+        if (!strstr(rt_modules[i].name, ".so")) return &rt_modules[i];
+    return NULL;
+}
 uint32_t rt_module_symbol(const GuestModule *module, const char *name) {
     if (!module) {
         for (size_t i = 0; i < rt_module_count; ++i) {

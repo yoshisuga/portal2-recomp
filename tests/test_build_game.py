@@ -27,7 +27,7 @@ class DispatchTableTests(unittest.TestCase):
         harness += ['int rt_load_segment(const char *d, const char *n, uint32_t o, uint32_t a, uint32_t f, uint32_t m)'
                     ' { (void)d; (void)n; (void)o; (void)a; (void)f; (void)m; return 0; }',
                     'int rt_register_tls(const char *d, const char *n, uint32_t i, uint32_t o, uint32_t f, uint32_t m,'
-                    ' uint32_t a) { (void)d; (void)n; (void)i; (void)o; (void)f; (void)m; (void)a; return 0; }',
+                    ' uint32_t a, uint32_t s) { (void)d; (void)n; (void)i; (void)o; (void)f; (void)m; (void)a; (void)s; return 0; }',
                     'int rt_init_import_data(const char *n, uint32_t a, uint32_t s) { (void)n; (void)a; (void)s; return 0; }',
                     'int main(void) { int bad = 0;']
         for probe in probes:

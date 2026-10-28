@@ -14,6 +14,7 @@ typedef struct {
 extern const GuestModule rt_modules[];
 extern const size_t rt_module_count;
 const GuestModule *rt_find_module(const char *name);
+const GuestModule *rt_program_module(void);
 uint32_t rt_module_symbol(const GuestModule *module, const char *name);
 uint32_t rt_invoke(CPU *c, uint32_t address, const uint32_t *args, size_t count);
 int rt_initialize_module(CPU *c, const GuestModule *module);

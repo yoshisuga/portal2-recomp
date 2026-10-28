@@ -36,7 +36,9 @@ int main(int argc, char **argv) {
     CPU cpu; rt_cpu_reset(&cpu); cpu.esp = 0x70800000;
     uint32_t count = (uint32_t)(argc - first + 1), vector = rt_alloc((count + 1) * 4);
     if (!vector) { rt_destroy(); return 2; }
-    W32(vector, guest_string("portal2_linux"));
+    const GuestModule *program = rt_program_module();
+    if (!program) { fputs("no recompiled game program\n", stderr); rt_destroy(); return 2; }
+    W32(vector, guest_string(program->name));
     for (uint32_t i = 1; i < count; ++i) W32(vector + i * 4, guest_string(argv[first + (int)i - 1]));
     W32(vector + count * 4, 0);
     {   // /proc/self/cmdline : arguments invités séparés par des NUL
@@ -50,14 +52,13 @@ int main(int argc, char **argv) {
         if (joined) { rt_procfs_set_cmdline(joined, total); free(joined); }
     }
     rt_loader_set_arguments(count, vector, 0);
-    const GuestModule *program = rt_find_module("portal2_linux");
     uint32_t entry = program ? rt_module_symbol(program, "main") : 0;
-    if (!entry) { fputs("real portal2_linux main is absent\n", stderr); rt_destroy(); return 2; }
+    if (!entry) { fprintf(stderr, "real %s main is absent\n", program->name); rt_destroy(); return 2; }
     if (rt_initialize_module(&cpu, program)) { rt_destroy(); return 2; }
     uint32_t args[] = {count, vector, 0};
-    fprintf(stderr, "entering recompiled portal2_linux main at %#x\n", entry);
+    fprintf(stderr, "entering recompiled %s main at %#x\n", program->name, entry);
     int result = (int32_t)rt_invoke(&cpu, entry, args, 3);
-    fprintf(stderr, "portal2_linux main returned %d\n", result);
+    fprintf(stderr, "%s main returned %d\n", program->name, result);
     rt_destroy();
     return result;
 }

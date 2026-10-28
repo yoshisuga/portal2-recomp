@@ -3,7 +3,7 @@
 #include <stdlib.h>
 
 typedef struct TLSModule {
-    uint32_t id, size, alignment;
+    uint32_t id, size, alignment, static_offset;
     uint8_t *initial;
     struct TLSModule *next;
 } TLSModule;
@@ -17,8 +17,9 @@ static TLSModule *modules;
 static TLSBlock *blocks;
 
 int rt_register_tls(const char *directory, const char *name, uint32_t id,
-                    uint32_t offset, uint32_t filesz, uint32_t memsz, uint32_t alignment) {
+                    uint32_t offset, uint32_t filesz, uint32_t memsz, uint32_t alignment, uint32_t static_offset) {
     if (!id || !memsz || filesz > memsz || !alignment || (alignment & (alignment - 1))) return -1;
+    if (static_offset && (static_offset < memsz || static_offset > 0x10000)) return -1;
     for (TLSModule *m = modules; m; m = m->next) if (m->id == id) return -1;
     TLSModule *m = calloc(1, sizeof(*m));
     if (!m) return -1;
@@ -36,7 +37,7 @@ int rt_register_tls(const char *directory, const char *name, uint32_t id,
         }
         if (failed) { free(m->initial); free(m); return -1; }
     }
-    m->id = id; m->size = memsz; m->alignment = alignment;
+    m->id = id; m->size = memsz; m->alignment = alignment; m->static_offset = static_offset;
     m->next = modules; modules = m;
     return 0;
 }
@@ -54,6 +55,9 @@ uint32_t rt_thread_pointer(CPU *c) {
     W32(ctx->pointer, ctx->pointer); W32(ctx->pointer + 8, ctx->pointer);
     W32(ctx->pointer + 20, arc4random() & 0xffffff00u);
     W32(ctx->pointer + 24, arc4random());
+    // Blocs TLS statiques sous le TCB, dans la zone réservée de 64 Kio.
+    for (TLSModule *m = modules; m; m = m->next)
+        if (m->static_offset) memcpy(GPTR(ctx->pointer - m->static_offset), m->initial, m->size);
     ctx->next = contexts; contexts = ctx;
     c->gs_base = ctx->pointer;
     return c->gs_base;
@@ -64,6 +68,7 @@ uint32_t rt_tls_address(CPU *c, uint32_t module, uint32_t offset) {
     TLSModule *m = modules;
     while (m && m->id != module) m = m->next;
     if (!m || offset >= m->size) rt_trap(c, c->eip, "unknown module or offset in guest TLS descriptor");
+    if (m->static_offset) return rt_thread_pointer(c) - m->static_offset + offset;
     for (TLSBlock *b = blocks; b; b = b->next)
         if (b->thread == c->tid && b->module == module) return b->address + offset;
     uint64_t size = (uint64_t)m->size + m->alignment - 1;

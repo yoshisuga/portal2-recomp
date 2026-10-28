@@ -433,3 +433,37 @@ lf_cvtps2pi:                               # packed float -> MMX integers
     movq qword ptr [0x20019e50], mm2
     emms
     ret
+
+.globl lf_ssse3
+lf_ssse3:                                  # SSSE3/SSE3/SSE4.1 forms used by Half-Life 2
+    movdqa xmm0, xmmword ptr [0x20018f00]  # bytes 0..15
+    movdqa xmm1, xmmword ptr [0x20018f10]  # shuffle mask
+    movdqa xmm2, xmm0
+    pshufb xmm2, xmm1
+    movdqu xmmword ptr [0x20019f00], xmm2
+    movdqa xmm2, xmm0
+    palignr xmm2, xmmword ptr [0x20018f10], 5
+    movdqu xmmword ptr [0x20019f10], xmm2
+    pabsw xmm3, xmmword ptr [0x20018f20]
+    movdqu xmmword ptr [0x20019f20], xmm3
+    pabsd xmm3, xmmword ptr [0x20018f20]
+    movdqu xmmword ptr [0x20019f30], xmm3
+    movddup xmm4, qword ptr [0x20018f30]
+    movdqu xmmword ptr [0x20019f40], xmm4
+    movapd xmm5, xmmword ptr [0x20018f40]
+    addsubpd xmm5, xmmword ptr [0x20018f50]
+    movupd xmmword ptr [0x20019f50], xmm5
+    mov eax, 0x11223344
+    movdqa xmm6, xmm0
+    pinsrd xmm6, eax, 2
+    movdqu xmmword ptr [0x20019f60], xmm6
+    pextrd dword ptr [0x20019f70], xmm0, 3
+    pextrw edx, xmm0, 5
+    mov dword ptr [0x20019f74], edx
+    pinsrw xmm6, word ptr [0x20018f30], 7
+    movdqu xmmword ptr [0x20019f80], xmm6
+    movq mm0, qword ptr [0x20018f00]
+    pshufb mm0, qword ptr [0x20018f10]
+    movq qword ptr [0x20019f90], mm0
+    emms
+    ret

@@ -282,8 +282,10 @@ static int translated_plugin(const char *relative) {
     if(!*name || strchr(name,'/'))return 0;
     const RtPeImage *image=rt_pe_image_named(name);
     char host[PATH_MAX];
-    if(!image || !game_root[0] || join(host,game_root,relative))return 0;
-    return rt_pe_file_matches(image,host);
+    if(!image || !game_root[0])return 0;
+    // Copie Windows (Portal 2) ou dépôt Linux (Half-Life 2, copie macOS sans bin/linux32).
+    if(!join(host,game_root,relative) && rt_pe_file_matches(image,host))return 1;
+    return !join(host,linux_root,relative) && rt_pe_file_matches(image,host);
 }
 // La copie du jeu est l'installation Windows : ses binaires (DLL, EXE, greffons
 // Miles .asi/.flt) n'existent pas dans une installation Linux et ne doivent pas
@@ -440,5 +442,12 @@ static const char *write_path(const char *path,int preserve_existing,int follow_
     return result;
 }
 const char *rt_program_path(void) {
-    char *result=buffer();snprintf(result,PATH_MAX,"%s/portal2_linux",game_root);return result;
+    // Programme principal du dépôt Linux : hl2_linux (Half-Life 2) ou portal2_linux.
+    char *result=buffer();
+    static const char *const names[]={"hl2_linux","portal2_linux"};
+    for(size_t i=0;i<sizeof(names)/sizeof(*names);++i){
+        char probe[PATH_MAX];snprintf(probe,PATH_MAX,"%s/%s",linux_root,names[i]);
+        if(!access(probe,F_OK)){snprintf(result,PATH_MAX,"%s/%s",game_root,names[i]);return result;}
+    }
+    snprintf(result,PATH_MAX,"%s/portal2_linux",game_root);return result;
 }

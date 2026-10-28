@@ -330,7 +330,8 @@ CPU *rt_shim_cpu(void);   // CPU du shim en cours sur ce thread, NULL hors shim
 void *rt_span(CPU *c, uint32_t address, uint64_t length);
 void *rt_write_span(CPU *c, uint32_t address, uint64_t length);
 uint32_t rt_string_length(CPU *c, uint32_t address);
-int rt_register_tls(const char *directory, const char *name, uint32_t id, uint32_t offset, uint32_t filesz, uint32_t memsz, uint32_t alignment);
+// static_offset : bloc TLS statique à TP - static_offset (modèle initial-exec), 0 sinon.
+int rt_register_tls(const char *directory, const char *name, uint32_t id, uint32_t offset, uint32_t filesz, uint32_t memsz, uint32_t alignment, uint32_t static_offset);
 uint32_t rt_thread_pointer(RT_NOESCAPE CPU *c);
 uint32_t rt_tls_address(RT_NOESCAPE CPU *c, uint32_t module, uint32_t offset);
 void rt_tls_destroy(void);
@@ -346,6 +347,7 @@ int rt_format_shim(CPU *c, const char *name);
 int rt_pthread_shim(CPU *c, const char *name);
 void rt_pthreads_destroy(void);
 uint32_t rt_alloc(uint32_t size);
+uint32_t rt_alloc_aligned(uint32_t alignment, uint32_t size);   // 0 si alignement invalide
 uint32_t rt_realloc(uint32_t ptr, uint32_t size);
 int rt_free(uint32_t ptr);
 uint32_t rt_heap_usable_size(uint32_t ptr);   // 0 si ptr ne vient pas du tas invité

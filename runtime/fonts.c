@@ -13,6 +13,7 @@
 // SHIMS: FcInit FcConfigGetCurrent FcConfigSubstitute FcDefaultSubstitute FcFontList FcFontMatch
 // SHIMS: FcFontSetDestroy FcObjectSetCreate FcObjectSetAdd FcObjectSetDestroy
 // SHIMS: FcPatternCreate FcPatternAdd FcPatternDestroy FcPatternGetBool FcPatternGetString
+// SHIMS: FcInitLoadConfigAndFonts FcConfigSetCurrent FcConfigAppFontAddFile
 #include "rt.h"
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -447,6 +448,18 @@ static int fontconfig_shim(CPU *c, const char *name) {
         if (config && !handle && !(handle = rt_handle_new(config, KIND_CONFIG)))
             rt_trap(c, c->eip, "handle table full (FcConfig)");
         c->eax = handle;
+    } else if (!strcmp(name, "FcInitLoadConfigAndFonts")) {
+        // Half-Life 2 crée sa propre configuration pour y ajouter ses polices.
+        FcConfig *config = FcInitLoadConfigAndFonts();
+        uint32_t handle = config ? rt_handle_new(config, KIND_CONFIG) : 0;
+        if (config && !handle) rt_trap(c, c->eip, "handle table full (FcConfig)");
+        c->eax = handle;
+    } else if (!strcmp(name, "FcConfigSetCurrent")) {
+        c->eax = (uint32_t)FcConfigSetCurrent(config_of(c, arg(c, 0)));
+    } else if (!strcmp(name, "FcConfigAppFontAddFile")) {
+        const char *guest_path = host_string(c, arg(c, 1));
+        const char *host_path = guest_path ? rt_read_path(guest_path) : NULL;
+        c->eax = host_path ? (uint32_t)FcConfigAppFontAddFile(config_of(c, arg(c, 0)), (const FcChar8 *)host_path) : 0;
     } else if (!strcmp(name, "FcPatternCreate")) {
         c->eax = wrap_pattern(c, FcPatternCreate());
     } else if (!strcmp(name, "FcPatternDestroy")) {

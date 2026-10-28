@@ -33,15 +33,16 @@ DEBUG = {'full': '-g', 'lines': '-gline-tables-only', 'none': '-g0'}
 TOOLS = ['tools/lift.py', 'tools/float_lift.py', 'tools/registry.py', 'tools/build_game.py', 'tools/peprep.py']
 # Greffons Windows que libMiles charge lui-même depuis bin/linux32 de la copie
 # du jeu (runtime/pe.c) : mssmp3 décode les voix MP3, mssvoice le chat vocal,
-# binkawin l'audio des vidéos Bink.
-PE_PLUGINS = ('mssmp3.asi', 'mssvoice.asi', 'binkawin.asi')
+# binkawin l'audio des vidéos Bink, mssmixer le mixeur (livré à part par Half-Life 2).
+PE_PLUGINS = ('mssmp3.asi', 'mssvoice.asi', 'binkawin.asi', 'mssmixer.mix')
 KEEP_CONFIGURATIONS = 2   # objets conservés pour les deux derniers jeux d'options
 
 
 def roots(layout):
-    result = ['portal2_linux:symbol:main']
+    program = next((m['name'] for m in layout['modules'] if '.so' not in m['name']), 'portal2_linux')
+    result = [f'{program}:symbol:main']
     for module in layout['modules']:
-        if module['name'] in ('libtier0.so', 'libvstdlib.so', 'portal2_linux'):
+        if module['name'] in ('libtier0.so', 'libvstdlib.so', program):
             if module['init']: result.append(f'{module["name"]}:init:dt')
             result += [f'{module["name"]}:init:{i}' for i in range(len(module['init_array']))]
     extra = Path('config/game-roots.json')
@@ -63,7 +64,7 @@ def generation_key(layout_path, layout, specs, whole_game):
     objdump = shutil.which('objdump') or 'objdump'
     return digest(*(Path(t).read_bytes() for t in TOOLS[:3]), layout_path.read_bytes(), images, specs,
                   whole_game, objdump, Path(objdump).stat().st_mtime_ns if Path(objdump).exists() else 0,
-                  lift.SHARD_BITS, 'v1')
+                  lift.SHARD_BITS, 'v1', lift.TRAP_UNSUPPORTED)
 
 
 def generate(args, layout, specs):
@@ -92,6 +93,8 @@ def generate_plugins(config_path, log=print):
     out.mkdir(parents=True, exist_ok=True)
     config = json.loads(Path(config_path).read_text()) if Path(config_path).exists() else {}
     root = Path(config.get('game_root', '')) / 'bin/linux32'
+    if not root.is_dir() and config.get('linux_root'):
+        root = Path(config['linux_root']) / 'bin/linux32'   # Half-Life 2 : copie macOS, greffons dans le dépôt Linux
     sources, stats = [], []
     for name in PE_PLUGINS:
         path = root / name
@@ -221,6 +224,10 @@ def disk_usage(path):
 
 
 def main():
+    # Instructions non traduites : piège à leur adresse (lift.TRAP_UNSUPPORTED),
+    # aussi dans les processus de traduction, qui relisent l'environnement.
+    os.environ['LIFT_TRAP_UNSUPPORTED'] = '1'
+    lift.TRAP_UNSUPPORTED = True
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--layout', type=Path, default=Path('build/game/prep/layout.json'))
     parser.add_argument('--out', type=Path, default=Path('build/portal2-native'))

@@ -1,5 +1,5 @@
 // Pont Steam : remplace les exports Steam de libsteam_api.so invité par la
-// libsteam_api.dylib officielle de Valve (SDK 1.53a, ARM64), chargée par dlopen
+// libsteam_api.dylib officielle de Valve (SDK 1.60 pour Half-Life 2, ARM64), chargée par dlopen
 // depuis un chemin local jamais versionné (docs/steam.md). Toute réponse vient du
 // vrai client Steam ; une méthode non traduite est un rt_trap nommé.
 //
@@ -35,6 +35,7 @@
 // SHIMS: SteamInternal_FindOrCreateGameServerInterface SteamInternal_GameServer_Init
 // SHIMS: SteamGameServer_Shutdown SteamGameServer_RunCallbacks SteamGameServer_GetHSteamPipe
 // SHIMS: SteamGameServer_GetHSteamUser SteamGameServer_GetIPCCallCount
+// SHIMS: SteamInternal_SteamAPI_Init SteamInternal_GameServer_Init_V2 SteamAPI_SetBreakpadAppID
 
 #define KIND_INTERFACE 0x5354494du   // 'STIM'
 #define OPAQUE_SLOTS 32u             // interfaces absentes du SDK 1.53a (GameCoordinator...)
@@ -384,7 +385,27 @@ static int method_shim(CPU *c, const char *name) {
     if (iface < 0) return 0;
     const SteamMethodInfo *m = find_method(name);
     if (!m && virtual_bridge(c, name, table, iface)) return 1;
-    if (!m) fail(c, "Steam: %s has no flat function in SDK 1.53a%s", name, "");
+    if (!m && !strncmp(name, "STEAMTIMELINE_INTERFACE", 23)) {
+        // Version de Timeline plus récente que la dylib (Half-Life 2 demande V004) :
+        // repères d'enregistrement Steam seulement, sans effet sur le jeu. Appel
+        // cdecl, l'appelant nettoie la pile ; poignées et résultats à 0.
+        static int logged;
+        if (!logged) { logged = 1; fprintf(stderr, "steam: %s ignored (Steam Timeline is not bridged)\n", name); }
+        c->eax = 0; c->edx = 0;
+        return 1;
+    }
+    if (!m) fail(c, "Steam: %s has no flat function in SDK 1.60%s", name, "");
+    if (!m->fn && !strncmp(name, "SteamMatchMakingServers002::", 28)) {
+        // Navigateur de serveurs (jeu solo hors ligne) : aucune requête n'est
+        // jamais créée, donc aucune poignée HServerListRequest à convertir.
+        // Requêtes : NULL ; compteurs et booléens : 0 ; HServerQuery : invalide.
+        const char *method = name + 28;
+        c->eax = (!strcmp(method, "PingServer") || !strcmp(method, "PlayerDetails") || !strcmp(method, "ServerRules"))
+                 ? UINT32_MAX : 0;
+        c->edx = 0;
+        if (m->sret) steam_pop_hidden_pointer(c);
+        return 1;
+    }
     if (!m->fn) {
         snprintf(message, sizeof(message), "Steam: %s (vtable slot %u) is not bridged: %s", name, m->slot, m->why);
         rt_trap(c, c->eip, message);
@@ -642,13 +663,29 @@ static int steam_shim(CPU *c, const char *name) {
     static int breakpad_logged, comment_logged, minidump_logged;
     if (strstr(name, "::")) return method_shim(c, name);
     if (strncmp(name, "Steam", 5)) return 0;
-    if (!strcmp(name, "SteamAPI_InitSafe")) {
+    if (!strcmp(name, "SteamAPI_InitSafe") || !strcmp(name, "SteamInternal_SteamAPI_Init")) {
         // Mécanisme documenté par Valve : SteamAppId désigne le jeu ; le client
         // vérifie toujours la possession. Pris dans config/local.json s'il manque.
+        // Half-Life 2 vide SteamAppId (setenv « ») avant l'initialisation : vide = absent.
         char appid[32];
-        if (!getenv("SteamAppId") && config_value("steam_appid", appid, sizeof(appid))) {
-            setenv("SteamAppId", appid, 0); setenv("SteamGameId", appid, 0);
+        const char *current = getenv("SteamAppId");
+        if ((!current || !*current) && config_value("steam_appid", appid, sizeof(appid))) {
+            setenv("SteamAppId", appid, 1); setenv("SteamGameId", appid, 1);
             fprintf(stderr, "steam: SteamAppId=%s from config/local.json\n", appid);
+        }
+        if (!strcmp(name, "SteamInternal_SteamAPI_Init")) {
+            // SDK 1.60 : (liste de versions séparées par des NUL, SteamErrMsg char[1024]) ->
+            // ESteamAPIInitResult, 0 si réussi.
+            uint32_t versions = arg(c, 0), message = arg(c, 1);
+            if (message) rt_write_span(c, message, 1024);
+            int32_t (*init)(const char *, char *) = FLAT(int32_t (*)(const char *, char *), name);
+            Capture capture; capture_begin(&capture);
+            int32_t result = init(versions ? (const char *)GPTR(versions) : NULL, message ? (char *)GPTR(message) : NULL);
+            capture_end(&capture);
+            if (!result) enable_manual_dispatch(c);
+            else fprintf(stderr, "steam: SteamAPI_Init failed (%d): %s\n", result, message ? (char *)GPTR(message) : "");
+            c->eax = (uint32_t)result;
+            return 1;
         }
         bool (*init)(void) = FLAT(bool (*)(void), "SteamAPI_InitSafe");
         Capture capture; capture_begin(&capture);
@@ -705,6 +742,22 @@ static int steam_shim(CPU *c, const char *name) {
         const char *version = steam_in_string(c, arg(c, 1));
         void *host = FLAT(void *(*)(int32_t, const char *), name)((int32_t)arg(c, 0), version);
         c->eax = steam_proxy(c, host, version);
+    } else if (!strcmp(name, "SteamAPI_SetBreakpadAppID")) {
+        log_once(&breakpad_logged, "SteamAPI_SetBreakpadAppID");
+    } else if (!strcmp(name, "SteamInternal_GameServer_Init_V2")) {
+        // SDK 1.60 : (uint32 unIP, uint16 usGamePort, uint16 usQueryPort, EServerMode,
+        //  const char *pchVersionString, const char *versions, SteamErrMsg *) -> ESteamAPIInitResult.
+        int32_t (*init)(uint32_t, uint16_t, uint16_t, int32_t, const char *, const char *, char *) =
+            FLAT(int32_t (*)(uint32_t, uint16_t, uint16_t, int32_t, const char *, const char *, char *), name);
+        const char *version = steam_in_string(c, arg(c, 4));
+        uint32_t versions = arg(c, 5), message = arg(c, 6);
+        if (message) rt_write_span(c, message, 1024);
+        Capture capture; capture_begin(&capture);
+        int32_t result = init(arg(c, 0), (uint16_t)arg(c, 1), (uint16_t)arg(c, 2), (int32_t)arg(c, 3), version,
+                              versions ? (const char *)GPTR(versions) : NULL, message ? (char *)GPTR(message) : NULL);
+        capture_end(&capture);
+        if (!result) enable_manual_dispatch(c);
+        c->eax = (uint32_t)result;
     } else if (!strcmp(name, "SteamInternal_GameServer_Init")) {
         // (uint32 unIP, uint16 usLegacySteamPort, uint16 usGamePort, uint16 usQueryPort,
         //  EServerMode eServerMode, const char *pchVersionString) ; six arguments dans la dylib.

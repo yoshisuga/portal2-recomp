@@ -29,6 +29,12 @@ CC = dict(o='O', no='NO', b='B', c='B', nae='B', ae='AE', nb='AE', nc='AE',
           ge='GE', nl='GE', le='LE', ng='LE', g='G', nle='G')
 
 
+# Jeu complet (tools/build_game.py) : une instruction non traduite devient un
+# piège à son adresse au lieu de rejeter toute la fonction. Désactivé par
+# défaut : le générateur reste fermé en cas d'échec.
+TRAP_UNSUPPORTED = os.environ.get('LIFT_TRAP_UNSUPPORTED') == '1'
+
+
 class Unsupported(ValueError):
     pass
 
@@ -241,6 +247,20 @@ def translate(pc, insn, entries=frozenset(), callees=None, cases=None, rebase=Fa
         if target.imm is not None:
             call = 'c->flags = f; ' + call
         return f'{call} if (c->eip != {after}) goto resume; f = c->flags; {end}', [nxt]
+    if op == 'push' and args in ('cs', 'ds', 'es', 'ss'):
+        # Sélecteurs d'un processus Linux i386 (espace plat) : sauvegardes de
+        # segments du code Windows (greffons Miles), sans effet sur l'adressage.
+        return f'PUSH(c, {0x23 if args == "cs" else 0x2b:#x}u); {end}', [nxt]
+    if op == 'pop' and args in ('ds', 'es'):
+        return f'c->esp += 4; {end}', [nxt]
+    if op in ('jecxz', 'jcxz') and args:
+        target = int(args.split()[0], 0)
+        register = 'c->ecx' if op == 'jecxz' else '(c->ecx & 0xffffu)'
+        if target in entries:
+            callees.add(target)
+            branch = f'c->flags = f; rt_jump_fn(c, fn_{target:x}, {code_address(target, rebase)}); return;'
+            return f'if ({register} == 0) {{ {branch} }} {end}', [nxt]
+        return f'if ({register} == 0) {{ {"rt_poll(); " if target <= pc else ""}goto L{target:x}; }} {end}', [target, nxt]
     if op == 'jmp' or (op.startswith('j') and op[1:] in CC):
         target = Operand(args)
         if target.imm is None:
@@ -485,7 +505,13 @@ def lift(entry, insns, entries=frozenset(), callees=None, tables=None, setjmp=No
             code, successors = translate(pc, insns[pc], others, callees,
                                          tables(pc) if tables else None, delta is not None)
         except (Unsupported, IndexError) as exc:
-            raise Unsupported(f'{pc:#x}: {exc}') from exc
+            # Instruction non traduite (SSSE3, SSE4, AES-NI... que le CPUID
+            # virtuel n'annonce pas) : piège nommé à son adresse, le reste de la
+            # fonction est traduit. Jamais ignorée en silence.
+            op = insns[pc][1]
+            if not TRAP_UNSUPPORTED or not re.fullmatch(r'[a-z0-9]+', op):
+                raise Unsupported(f'{pc:#x}: {exc}') from exc
+            code, successors = f'rt_trap(c, {code_address(pc, delta is not None)}, "unsupported instruction {op}");', []
         translated[pc] = code
         pending.extend(successors)
         nxt, op, args = insns[pc]
@@ -615,6 +641,48 @@ class JumpTables:
                 return None
         return None
 
+    def loaded_table(self, pc, register, history):
+        """Formes de GCC récent (Half-Life 2, 2024) : le registre de saut est
+        chargé de la table, éventuellement additionné au GOT, à travers des
+        copies : `add R, [B + 4*I - D]`, `mov R, B; add R, [B + 4*I - D]`,
+        `add R, [..]; mov R2, R`, `mov R, [B + 4*I - D]; lea R, [R + B]`,
+        `mov R, [4*I + T]` (table absolue). B vaut le GOT du module."""
+        if register not in REGS or REGS[register][1] != 32:
+            return None
+        mod = self.module(pc)
+        got = mod['gotplt'] if mod else 0
+        based = False
+        for k, (_, _, op, text) in enumerate(history[:4]):
+            parts = [x.strip() for x in text.split(',', 1)]
+            if len(parts) != 2:
+                return None
+            if parts[0] != register:
+                if op in ('mov', 'lea', 'add', 'sub', 'cmp', 'test') and not op.startswith('j'):
+                    continue   # instruction indépendante du registre de saut
+                return None
+            if op == 'mov' and parts[1] in REGS:
+                register = parts[1]
+                continue
+            if op == 'lea':
+                m = re.fullmatch(rf'\[{register} \+ (\w+)\]', parts[1]) or re.fullmatch(rf'\[(\w+) \+ {register}\]', parts[1])
+                if not m:
+                    return None
+                based = True
+                continue
+            m = re.fullmatch(r'dword ptr \[(?:(\w+) \+ )?4\*(\w+)(?: ([+-]) (0x[0-9a-f]+))?\]', parts[1])
+            if op not in ('mov', 'add') or not m:
+                return None
+            displacement = int(m[4], 16) * (-1 if m[3] == '-' else 1) if m[4] else 0
+            if m[1] is None:
+                if op == 'add' or based:
+                    return None
+                return displacement & 0xffffffff, m[2], 0, history[k + 1:]
+            based = based or op == 'add'
+            if not based:
+                return None   # [B + 4*I] chargé sans ajout du GOT : forme inconnue
+            return (got + displacement) & 0xffffffff, m[2], got, history[k + 1:]
+        return None
+
     def __call__(self, pc):
         if pc not in self.cache:
             self.cache[pc] = self.resolve(pc)
@@ -634,15 +702,22 @@ class JumpTables:
             add = [x.strip() for x in add_args.split(',')]
             m = re.fullmatch(r'dword ptr \[(\w+) \+ 4\*(\w+) ([+-]) (0x[0-9a-f]+)\]',
                              mov_args.split(',', 1)[-1].strip())
-            if not (add_op == 'add' and add[0] == args and mov_op == 'mov' and m
-                    and mov_args.split(',')[0].strip() == args and add[1] == m[1]):
-                return None
-            mod = self.module(pc)
-            base = mod['gotplt'] if mod else 0
-            displacement = int(m[4], 16) * (-1 if m[3] == '-' else 1)
-            table, index, rest = (base + displacement) & 0xffffffff, m[2], history[2:]
+            if add_op == 'add' and add[0] == args and mov_op == 'mov' and m \
+                    and mov_args.split(',')[0].strip() == args and add[1] == m[1]:
+                mod = self.module(pc)
+                base = mod['gotplt'] if mod else 0
+                displacement = int(m[4], 16) * (-1 if m[3] == '-' else 1)
+                table, index, rest = (base + displacement) & 0xffffffff, m[2], history[2:]
+            else:
+                found = self.loaded_table(pc, args, history)
+                if not found:
+                    return None
+                table, index, base, rest = found
         else:
-            return None
+            found = self.loaded_table(pc, args, history)
+            if not found:
+                return None
+            table, index, base, rest = found
         if index not in REGS:
             return None
         count = self.bound(rest, REGS[index][0])
@@ -894,7 +969,7 @@ def generate(layout, exports, objdump, allow_unimplemented=False, disasm_cache=N
         tls = mod.get('tls')
         if tls:
             code.append(f'if (rt_register_tls(directory, {json.dumps(mod["name"])}, {mod["modid"]}u, '
-                        f'{tls["off"]}u, {tls["filesz"]}u, {tls["memsz"]}u, {tls["align"]}u)) return -1;')
+                        f'{tls["off"]}u, {tls["filesz"]}u, {tls["memsz"]}u, {tls["align"]}u, {tls.get("static", 0)}u)) return -1;')
     for item in layout.get('data_imports', []):
         code.append(f'if (rt_init_import_data({json.dumps(item["name"])}, {item["addr"]:#x}u, {item["size"]}u)) return -1;')
     code.extend(['return 0; }', ''])
@@ -1274,7 +1349,7 @@ def dispatch_source(layout, selected, imports, functions):
         tls = mod.get('tls')
         if tls:
             code.append(f'if (rt_register_tls(directory, {json.dumps(mod["name"])}, {mod["modid"]}u, '
-                        f'{tls["off"]}u, {tls["filesz"]}u, {tls["memsz"]}u, {tls["align"]}u)) return -1;')
+                        f'{tls["off"]}u, {tls["filesz"]}u, {tls["memsz"]}u, {tls["align"]}u, {tls.get("static", 0)}u)) return -1;')
     for item in layout.get('data_imports', []):
         code.append(f'if (rt_init_import_data({json.dumps(item["name"])}, {item["addr"]:#x}u, {item["size"]}u)) return -1;')
     code.extend(['return 0; }', ''])

@@ -22,13 +22,14 @@ if args.build:
 config = json.loads(Path('config/local.json').read_text())
 game_args = args.arguments
 if game_args[:1] == ['--']: game_args = game_args[1:]
-if not game_args: game_args = ['-game', 'portal2', '-novid', '-windowed', '-w', '1280', '-h', '720']
+if not game_args: game_args = ['-game', config.get('game', 'portal2'), '-novid', '-windowed', '-w', '1280', '-h', '720']
 # Les lancements de diagnostic (fenêtre cachée) travaillent sur une copie des
 # données utilisateur : jamais deux instances sur les mêmes sauvegardes et
 # réglages, ni de modification des réglages de l'utilisateur.
 user_dir = Path(config.get('user_dir') or '../work/portal2-userdata').expanduser().resolve()
 if not args.show:
     diag_dir = user_dir.with_name('portal2-userdata-diag')
+    user_dir.mkdir(parents=True, exist_ok=True)
     if not diag_dir.exists(): shutil.copytree(user_dir, diag_dir, symlinks=True)
     user_dir = diag_dir
 command = [str(args.binary.resolve()), '--images', str(Path('build/game/prep').resolve()),

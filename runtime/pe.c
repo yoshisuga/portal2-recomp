@@ -107,13 +107,22 @@ static int in_code(const RtPeImage *image, uint32_t rva) {
 }
 
 // Cherche une image traduite contenant `target` : bases candidates alignées
-// sur SectionAlignment (le chargeur de Miles projette page par page).
+// sur SectionAlignment (le chargeur de Miles de Portal 2 projette page par
+// page), puis target - RVA de chaque fonction traduite (celui de Half-Life 2
+// copie l'image dans un bloc du tas, à une base quelconque).
 static const Loaded *recognise(uint32_t target) {
     for (unsigned i = 0; i < image_count; ++i) {
         const RtPeImage *image = images[i];
         uint32_t alignment = image->section_alignment ? image->section_alignment : 4096;
         uint64_t base = target - target % alignment;
-        for (; base + image->image_size > target; base -= alignment) {
+        uint32_t next_function = 0;
+        for (;;) {
+            if (base + image->image_size <= target || base > target) {
+                // Bases alignées épuisées : bases exactes des fonctions traduites.
+                if (next_function == image->function_count) break;
+                base = target - image->function_rvas[next_function++];
+                if (base % alignment == 0) continue;   // déjà essayée
+            }
             uint32_t deltas[2];
             if (in_code(image, (uint32_t)(target - base)) && image_matches(image, (uint32_t)base, deltas)) {
                 for (unsigned j = 0; j < loaded_count; ++j)
@@ -132,7 +141,14 @@ static const Loaded *recognise(uint32_t target) {
                         (uint32_t)base, deltas[1], deltas[0]);
                 return &loaded[loaded_count++];
             }
-            if (base < alignment) break;
+            if (next_function) {
+                if (next_function == image->function_count) break;
+                base = target - image->function_rvas[next_function++];
+                while (base % alignment == 0 && next_function < image->function_count)
+                    base = target - image->function_rvas[next_function++];
+                if (base % alignment == 0) break;
+            } else if (base < alignment) base = (uint64_t)target + 1;   // passe aux bases exactes
+            else base -= alignment;
         }
     }
     return NULL;

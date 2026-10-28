@@ -399,6 +399,51 @@ def _lower_extended(op, args, Operand, Unsupported):
         keep = ', '.join(f'v.w[{i}]' for i in (range(4, 8) if op == 'pshuflw' else range(0, 4)))
         words = f'{lanes4}, {keep}' if op == 'pshuflw' else f'{keep}, {lanes4}'
         return aligned(src, f'{{ XMM v = {value}; {vwrite(dst, "(XMM){.w={" + words + "}}")} }}')
+    # --- SSSE3 / SSE3 / SSE4.1 utilisés par Half-Life 2 (2024, compilé pour SSSE3) ---
+    if op == 'pshufb' and two and is_vec(parts[0]):
+        count = vwidth(parts[0]) // 8
+        return binary(parts[0], parts[1],
+                      f'for (unsigned i = 0; i < {count}u; ++i) {{ uint8_t m = rhs.b[i]; '
+                      f'out.b[i] = (m & 0x80) ? 0 : lhs.b[m & {count - 1}u]; }}')
+    if op == 'palignr' and len(parts) == 3 and is_vec(parts[0]):
+        dst, src, imm = parts; imm = int(imm, 0) & 0xff
+        count = vwidth(dst) // 8
+        return aligned(src, f'{{ XMM lhs = {vread(dst)}, rhs = {vread(src, vwidth(dst))}, out = {{0}}; uint8_t t[{2 * count}]; '
+                            f'memcpy(t, rhs.b, {count}); memcpy(t + {count}, lhs.b, {count}); '
+                            f'for (unsigned i = 0; i < {count}u; ++i) out.b[i] = i + {imm}u < {2 * count}u ? t[i + {imm}u] : 0; '
+                            f'{vwrite(dst, "out")} }}')
+    m = re.fullmatch(r'pabs([bwd])', op)
+    if m and two and is_vec(parts[0]):
+        bits = SUFFIX_BITS[m[1]]; _, unsigned, signed = LANE[bits]
+        return binary(parts[0], parts[1], lanes(parts[0], bits, f'({signed})y < 0 ? ({unsigned})-({signed})y : y'))
+    if op == 'movddup' and two and reg(parts[0], 'xmm') is not None:
+        src = parts[1]
+        value = f'c->xmm[{reg(src, "xmm")}].q[0]' if reg(src, 'xmm') is not None else f'R64({Operand(src).addr})'
+        return f'{{ uint64_t v = {value}; c->xmm[{reg(parts[0], "xmm")}] = (XMM){{.q={{v, v}}}}; }}'
+    if op == 'lddqu' and two and reg(parts[0], 'xmm') is not None:
+        return f'c->xmm[{reg(parts[0], "xmm")}] = RX({Operand(parts[1]).addr});'   # sans contrainte d'alignement
+    if op == 'addsubpd' and two and reg(parts[0], 'xmm') is not None:
+        return binary(parts[0], parts[1], 'out.g[0] = lhs.g[0] - rhs.g[0]; out.g[1] = lhs.g[1] + rhs.g[1];')
+    if op == 'addsubps' and two and reg(parts[0], 'xmm') is not None:
+        return binary(parts[0], parts[1], 'for (unsigned i = 0; i < 4u; ++i) out.f[i] = (i & 1) ? lhs.f[i] + rhs.f[i] : lhs.f[i] - rhs.f[i];')
+    if op in ('pinsrd', 'pinsrw', 'pinsrb') and len(parts) == 3 and is_vec(parts[0]):
+        dst, src, imm = parts
+        bits = {'pinsrd': 32, 'pinsrw': 16, 'pinsrb': 8}[op]; field, unsigned, _ = LANE[bits]
+        lanes_count = vwidth(dst) // bits
+        operand = Operand(src)
+        value = f'({unsigned}){operand.read()}' if operand.addr is None or operand.width == bits else \
+            f'({unsigned}){"R32" if bits == 32 else "R16" if bits == 16 else "R8"}({operand.addr})'
+        return (f'{{ XMM v = {vread(dst)}; v.{field}[{(int(imm, 0) & 0xff) % lanes_count}] = {value}; '
+                f'{vwrite(dst, "v")} }}' + mmx_state(dst))
+    if op in ('pextrd', 'pextrw', 'pextrb') and len(parts) == 3 and is_vec(parts[1]):
+        dst, src, imm = parts
+        bits = {'pextrd': 32, 'pextrw': 16, 'pextrb': 8}[op]; field = LANE[bits][0]
+        lane = (int(imm, 0) & 0xff) % (vwidth(src) // bits)
+        value = f'({vread(src)}).{field}[{lane}]'
+        target = Operand(dst)
+        if target.addr is not None and target.width == bits:
+            return target.write(value) + mmx_state(src)
+        return target.write(f'(uint32_t){value}') + mmx_state(src)   # registre : zéro-étendu
     if op in ('psrldq', 'pslldq') and two and reg(parts[0], 'xmm') is not None:
         count = int(parts[1], 0) & 0xff
         dst = reg(parts[0], 'xmm')

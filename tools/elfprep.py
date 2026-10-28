@@ -17,6 +17,7 @@ HOST_BRIDGED = ('SteamAPI_', 'SteamInternal_', 'SteamGameServer_')
 R_386_NONE, R_386_32, R_386_PC32 = 0, 1, 2
 R_386_GLOB_DAT, R_386_JMP_SLOT, R_386_RELATIVE = 6, 7, 8
 R_386_TLS_DTPMOD32, R_386_TLS_DTPOFF32 = 35, 36
+R_386_TLS_TPOFF, R_386_TLS_TPOFF32 = 14, 37
 
 
 class Elf:
@@ -153,7 +154,8 @@ def main():
     # la portée globale puis dans sa portée locale (lui-même et ses DT_NEEDED).
     # Ainsi server.so utilise sa propre copie statique de libprotobuf et non
     # celle de client.so (sinon : « File already exists in database »).
-    scopes = lookup_scopes(mods)
+    # Le programme principal est le seul module qui n'est pas une bibliothèque.
+    scopes = lookup_scopes(mods, next((m.name for m in mods if '.so' not in m.name), 'portal2_linux'))
 
     def definition_for(module, name):
         for candidate in scopes[module.name]:
@@ -193,6 +195,19 @@ def main():
             return 0, None
         return thunk(name), 'libc'
 
+    # TLS statique (modèle initial-exec, libmimalloc de Half-Life 2) : le bloc
+    # du module est sous le pointeur de thread, à TP - static_tls (variante II
+    # d'i386), dans l'ordre de chargement comme le fait ld.so.
+    static_offset = 0
+    for m in mods:
+        m.static_tls = 0
+        if m.tls and any(t in (R_386_TLS_TPOFF, R_386_TLS_TPOFF32) for _, t, _ in m.rels()):
+            align = max(m.tls[7], 1)
+            static_offset = (static_offset + m.tls[5] + align - 1) & ~(align - 1)
+            m.static_tls = static_offset
+    if static_offset > 0x10000:
+        raise SystemExit('static TLS larger than the 64 KiB reserved below the thread pointer')
+
     meta_all = dict(imports=None, modules=[])
     for m in mods:
         tls_sym_off = {}
@@ -221,6 +236,20 @@ def main():
                     if not tls_symbol or tls_symbol['type'] != 6:
                         raise SystemExit(f'{m.name}: invalid TLS relocation symbol')
                     m.put32(off, A + tls_symbol['value'])
+                continue
+            if typ in (R_386_TLS_TPOFF, R_386_TLS_TPOFF32):
+                owner, value = m, (sym['value'] if sym else 0)
+                if sym and sym['bind'] and sym['shndx'] == 0:
+                    definition = definition_for(m, sym['name'])
+                    if not definition:
+                        raise SystemExit(f'{m.name}: unresolved external TLS symbol {sym["name"]}')
+                    owner, value = definition[0], definition[1]['value']
+                if not owner.static_tls:
+                    raise SystemExit(f'{m.name}: static TLS relocation into {owner.name} without static TLS')
+                if typ == R_386_TLS_TPOFF:
+                    m.put32(off, (value + A - owner.static_tls) & 0xffffffff)
+                else:
+                    m.put32(off, (owner.static_tls - value - A) & 0xffffffff)
                 continue
             symbolic = 16 in m.dyn or (m.dyn.get(30, 0) & 2)
             local = sym['bind'] == 0 or (sym['shndx'] != 0 and (symbolic or sym.get('visibility', 0) in (1, 2, 3)))
@@ -270,7 +299,7 @@ def main():
         md = dict(name=m.name, modid=m.modid, base=m.base, image=img,
                   gotplt=m.base + m.dyn.get(3, 0), entry=m.base + m.e_entry,
                   loads=[dict(off=p[1], vaddr=m.base + p[2], filesz=p[4], memsz=p[5], flags=p[6]) for p in m.loads],
-                  tls=(dict(off=m.tls[1], filesz=m.tls[4], memsz=m.tls[5], align=m.tls[7]) if m.tls else None),
+                  tls=(dict(off=m.tls[1], filesz=m.tls[4], memsz=m.tls[5], align=m.tls[7], static=m.static_tls) if m.tls else None),
                   init=(m.base + m.dyn[12]) if 12 in m.dyn else 0,
                   fini=(m.base + m.dyn[13]) if 13 in m.dyn else 0,
                   init_array=init_array, fini_array=fini_array,

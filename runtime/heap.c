@@ -190,6 +190,27 @@ uint32_t rt_alloc(uint32_t size) {
     return addr;
 }
 
+// memalign/posix_memalign : petits blocs alignés sur 16 octets, grands blocs
+// sur 4 Kio ; au-delà, une zone plus grande dont le début et la fin inutiles
+// retournent aux zones libres (multiples de 4 Kio, fusionnables).
+uint32_t rt_alloc_aligned(uint32_t alignment, uint32_t size) {
+    if (!alignment || (alignment & (alignment - 1))) return 0;
+    if (alignment <= 16) return rt_alloc(size);
+    if (alignment <= LARGE_ALIGN) return rt_alloc(size > SMALL_MAX ? size : SMALL_MAX + 1);
+    if (size > HEAP_END - HEAP_BEGIN - alignment) return 0;
+    uint32_t rounded = (size + LARGE_ALIGN - 1) & ~(LARGE_ALIGN - 1), padded = rounded + alignment - LARGE_ALIGN;
+    pthread_mutex_lock(&lock);
+    uint32_t zone = large_alloc(padded), addr = 0;
+    if (zone) {
+        addr = (zone + alignment - 1) & ~(alignment - 1);
+        uint32_t head = addr - zone, tail = padded - head - rounded;
+        if ((head && large_free(zone, head)) || (tail && large_free(addr + rounded, tail)) || table_put(addr, rounded)) addr = 0;
+        else live_bytes += rounded;
+    }
+    pthread_mutex_unlock(&lock);
+    return addr;
+}
+
 int rt_free(uint32_t ptr) {
     if (!ptr) return 0;
     pthread_mutex_lock(&lock);

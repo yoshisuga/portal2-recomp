@@ -344,3 +344,31 @@ RT_CHECK(lifter_libc_start_main) {
     if (!done) { kill(pid, SIGKILL); waitpid(pid, &status, 0); assert(!"child hung"); }
     assert(WIFEXITED(status) && WEXITSTATUS(status) == 42);  // 40 + argc + init ran
 }
+
+static double f64(uint32_t a) { return RD(a); }
+RT_CHECK(lifter_ssse3) {
+    clear();
+    uint8_t a[16], mask[16] = {15, 0, 0x80, 3, 3, 0x8f, 7, 1, 2, 9, 10, 0x40, 12, 13, 14, 4};
+    int16_t w[8] = {-5, 7, -32768, 0, 1, -1, 300, -300};
+    double dup = 2.5, x[2] = {1.5, 10}, y[2] = {0.25, 3};
+    for (int i = 0; i < 16; ++i) a[i] = (uint8_t)(0x10 + i);
+    memcpy(GPTR(IN + 0xf00), a, 16); memcpy(GPTR(IN + 0xf10), mask, 16); memcpy(GPTR(IN + 0xf20), w, 16);
+    memcpy(GPTR(IN + 0xf30), &dup, 8); memcpy(GPTR(IN + 0xf40), x, 16); memcpy(GPTR(IN + 0xf50), y, 16);
+    run_named("lf_ssse3");
+    for (int i = 0; i < 16; ++i)
+        assert(R8(OUT + 0xf00 + i) == ((mask[i] & 0x80) ? 0 : a[mask[i] & 15]));
+    uint8_t joined[32]; memcpy(joined, mask, 16); memcpy(joined + 16, a, 16);
+    assert(!memcmp(GPTR(OUT + 0xf10), joined + 5, 16));
+    for (int i = 0; i < 8; ++i) assert(R16(OUT + 0xf20 + 2 * i) == (uint16_t)(w[i] < 0 ? -w[i] : w[i]));
+    int32_t d[4]; memcpy(d, w, 16);
+    for (int i = 0; i < 4; ++i) assert(R32(OUT + 0xf30 + 4 * i) == (uint32_t)(d[i] < 0 ? -(int64_t)d[i] : d[i]));
+    assert(f64(OUT + 0xf40) == 2.5 && f64(OUT + 0xf48) == 2.5);
+    assert(f64(OUT + 0xf50) == 1.25 && f64(OUT + 0xf58) == 13);
+    uint32_t lanes[4]; memcpy(lanes, a, 16);
+    assert(R32(OUT + 0xf60) == lanes[0] && R32(OUT + 0xf64) == lanes[1] && R32(OUT + 0xf68) == 0x11223344u && R32(OUT + 0xf6c) == lanes[3]);
+    assert(R32(OUT + 0xf70) == lanes[3]);
+    assert(R32(OUT + 0xf74) == (uint32_t)(a[10] | a[11] << 8));
+    uint16_t dup_bits; memcpy(&dup_bits, &dup, 2);
+    assert(R16(OUT + 0xf8e) == dup_bits && R32(OUT + 0xf88) == 0x11223344u);
+    for (int i = 0; i < 8; ++i) assert(R8(OUT + 0xf90 + i) == ((mask[i] & 0x80) ? 0 : a[mask[i] & 7]));
+}
