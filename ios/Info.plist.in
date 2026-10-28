@@ -21,6 +21,18 @@
     <key>UISupportedInterfaceOrientations</key>
     <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
     <key>UILaunchScreen</key><dict/>
+    <!-- Cycle de vie UIScene (imposé par le SDK iOS 27) : une seule scène,
+         déléguée à SDL (ios/deps/sdl2-uiscene.patch). -->
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+        <key>UIApplicationSupportsMultipleScenes</key><false/>
+        <key>UISceneConfigurations</key>
+        <dict><key>UIWindowSceneSessionRoleApplication</key>
+            <array><dict>
+                <key>UISceneConfigurationName</key><string>Default</string>
+                <key>UISceneDelegateClassName</key><string>SDLUIKitSceneDelegate</string>
+            </dict></array></dict>
+    </dict>
     <!-- Icône : fichiers AppIcon* tirés du jeu par tools/build_ios.py. -->
     <key>CFBundleIcons</key>
     <dict><key>CFBundlePrimaryIcon</key><dict><key>CFBundleIconFiles</key><array><string>AppIcon60x60</string></array></dict></dict>

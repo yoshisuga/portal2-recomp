@@ -779,11 +779,12 @@ void *rt_ios_gl_share_group(void *context) {
     }
 }
 @end
+UIScreen *rt_ios_screen(void);   // sdl_ios.m
 static void request_frame_rate(void) {
     static CADisplayLink *link;
     if (link) return;
     const char *e = getenv("P2_IOS_MAX_FPS");
-    float wanted = e && atof(e) > 0 ? fminf((float)atof(e), (float)UIScreen.mainScreen.maximumFramesPerSecond) : 60;
+    float wanted = e && atof(e) > 0 ? fminf((float)atof(e), (float)rt_ios_screen().maximumFramesPerSecond) : 60;
     if (wanted <= 60) return;
     link = [CADisplayLink displayLinkWithTarget:[P2FrameRate new] selector:@selector(tick:)];
     link.preferredFrameRateRange = CAFrameRateRangeMake(wanted, wanted, wanted);   // avec un minimum de 60, iOS restait à 60

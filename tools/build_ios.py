@@ -30,9 +30,9 @@ ROOT = Path(__file__).resolve().parent.parent
 FRAMEWORKS = ['UIKit', 'Foundation', 'CoreGraphics', 'QuartzCore', 'OpenGLES', 'Metal', 'AVFoundation',
               'AudioToolbox', 'CoreAudio', 'CoreMotion', 'GameController', 'CoreHaptics', 'CoreBluetooth', 'OpenAL']
 TARGETS = {
-    'sim': dict(sdk='iphonesimulator', triple='arm64-apple-ios17.0-simulator', platform='ios-simulator',
+    'sim': dict(sdk='iphonesimulator', triple='arm64-apple-ios17.0-simulator',
                 plist='iPhoneSimulator'),
-    'device': dict(sdk='iphoneos', triple='arm64-apple-ios17.0', platform='ios', plist='iPhoneOS'),
+    'device': dict(sdk='iphoneos', triple='arm64-apple-ios17.0', plist='iPhoneOS'),
 }
 
 
@@ -88,9 +88,6 @@ def main():
     libs = [str(deps / 'lib' / n) for n in ('libSDL2main.a', 'libSDL2.a', 'libgl4es.a', 'libfreetype.a')]
     link = ['clang', *base, f'@{response}', *libs, '-liconv',
             *[x for f in FRAMEWORKS for x in ('-framework', f)],
-            # Le SDK 27 impose UIScene, que SDL2 ignore : déclarer un SDK 18
-            # garde le cycle de vie classique d'UIKit (voir ios/probe).
-            f'-Wl,-platform_version,{target["platform"]},17.0,18.0',
             '-o', str(app / 'portal2')]
     subprocess.run(link, check=True)
     plist = (ROOT / 'ios/Info.plist.in').read_text()

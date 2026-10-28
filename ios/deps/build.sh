@@ -2,7 +2,7 @@
 # Dépendances hôtes du port iOS (simulateur arm64 par défaut), construites dans
 # ../work/ios-deps à côté du dépôt (là où tools/build_ios.py les cherche).
 #   ios/deps/build.sh [sim|device]
-# Sources à versions fixées : SDL2 2.30.9, FreeType 2.13.3, gl4es (commit
+# Sources à versions fixées : SDL2 2.30.9 (sdl2-uiscene.patch), FreeType 2.13.3, gl4es (commit
 # ci-dessous) avec les correctifs de gl4es-ios.patch.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -33,6 +33,10 @@ if git -C src/gl4es diff --quiet; then
   git -C src/gl4es apply "$HERE/gl4es-ios.patch"
 elif ! git -C src/gl4es diff | cmp -s - "$HERE/gl4es-ios.patch"; then
   echo "src/gl4es modifié et différent de gl4es-ios.patch : à réconcilier" >&2; exit 1
+fi
+# SDL2 (archive, sans git) : cycle de vie UIScene, imposé par le SDK iOS 27.
+if ! patch -d src/SDL2 -p1 -R -s -f --dry-run < "$HERE/sdl2-uiscene.patch" > /dev/null; then
+  patch -d src/SDL2 -p1 -s < "$HERE/sdl2-uiscene.patch"
 fi
 
 PREFIX=$WORK/$TARGET

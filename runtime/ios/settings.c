@@ -20,6 +20,7 @@ const rt_ios_setting rt_ios_settings[] = {
     {"P2TouchControls", "P2_TOUCH_CONTROLS", NULL, NULL},       // auto, 1, 0
     {"P2TouchLook", "P2_TOUCH_LOOK", NULL, NULL},               // vitesse de la caméra
     {"P2TouchAccel", "P2_TOUCH_ACCEL", NULL, NULL},             // accélération du trackpad (1 : aucune)
+    {"P2Gyro", "P2_GYRO", NULL, NULL},                         // visée au gyroscope (0 : coupée)
     {"P2BackTap", "P2_BACKTAP", "1", "0"},
     {"P2BackTapSensitivity", "P2_BACKTAP_SENSITIVITY", NULL, NULL},
     {"P2BackTapInvert", "P2_BACKTAP_INVERT", "1", "0"},

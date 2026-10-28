@@ -68,7 +68,7 @@
 		</dict>
 		<dict>
 			<key>FooterText</key>
-			<string>Le mode trackpad fait tourner la caméra en glissant le doigt sur la moitié droite de l'écran ; le bouton en bas à gauche bascule aussi ce réglage en jeu.</string>
+			<string>Le mode trackpad fait tourner la caméra en glissant le doigt sur la moitié droite de l'écran ; le bouton en haut à gauche bascule aussi ce réglage en jeu. La visée au gyroscope tourne la caméra avec le téléphone.</string>
 			<key>Title</key>
 			<string>Commandes tactiles</string>
 			<key>Type</key>
@@ -98,7 +98,7 @@
 		</dict>
 		<dict>
 			<key>DefaultValue</key>
-			<false/>
+			<true/>
 			<key>Key</key>
 			<string>P2TouchTrackpad</string>
 			<key>Title</key>
@@ -159,8 +159,36 @@
 			</array>
 		</dict>
 		<dict>
+			<key>DefaultValue</key>
+			<string>1</string>
+			<key>Key</key>
+			<string>P2Gyro</string>
+			<key>Title</key>
+			<string>Visée au gyroscope</string>
+			<key>Titles</key>
+			<array>
+				<string>Désactivée</string>
+				<string>Lente (×0,5)</string>
+				<string>Normale</string>
+				<string>Rapide (×1,5)</string>
+				<string>Très rapide (×2)</string>
+				<string>Extrême (×3)</string>
+			</array>
+			<key>Type</key>
+			<string>PSMultiValueSpecifier</string>
+			<key>Values</key>
+			<array>
+				<string>0</string>
+				<string>0.5</string>
+				<string>1</string>
+				<string>1.5</string>
+				<string>2</string>
+				<string>3</string>
+			</array>
+		</dict>
+		<dict>
 			<key>FooterText</key>
-			<string>Tapez le dos du téléphone près du bord gauche pour le portail bleu, près du bord droit pour l'orange. Sans tapes au dos, des boutons de portail s'affichent en haut de l'écran.</string>
+			<string>Les boutons bleu et orange sous le bouton « utiliser », en bas à droite, tirent les portails. Avec les tapes au dos, tapez le dos du téléphone près du bord gauche pour le portail bleu, près du bord droit pour l'orange ; les boutons disparaissent alors (sauf choix contraire ci-dessous).</string>
 			<key>Title</key>
 			<string>Portails</string>
 			<key>Type</key>
@@ -168,7 +196,7 @@
 		</dict>
 		<dict>
 			<key>DefaultValue</key>
-			<true/>
+			<false/>
 			<key>Key</key>
 			<string>P2BackTap</string>
 			<key>Title</key>

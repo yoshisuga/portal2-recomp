@@ -7,8 +7,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 TARGET=${1:-sim}
 case "$TARGET" in
-  sim)    SDK=iphonesimulator; TRIPLE=arm64-apple-ios17.0-simulator; PLATFORM=ios-simulator; PLIST=iPhoneSimulator ;;
-  device) SDK=iphoneos; TRIPLE=arm64-apple-ios17.0; PLATFORM=ios; PLIST=iPhoneOS ;;
+  sim)    SDK=iphonesimulator; TRIPLE=arm64-apple-ios17.0-simulator; PLIST=iPhoneSimulator ;;
+  device) SDK=iphoneos; TRIPLE=arm64-apple-ios17.0; PLIST=iPhoneOS ;;
   *) echo "usage: $0 [sim|device]"; exit 2 ;;
 esac
 DEPS=${P2_IOS_DEPS:-$(cd .. && pwd)/work/ios-deps}/$TARGET
@@ -19,7 +19,7 @@ xcrun --sdk $SDK clang -target $TRIPLE -isysroot "$(xcrun --sdk $SDK --show-sdk-
   "$DEPS/lib/libSDL2main.a" "$DEPS/lib/libSDL2.a" "$DEPS/lib/libgl4es.a" \
   $(for f in UIKit Foundation CoreGraphics QuartzCore OpenGLES Metal AVFoundation AudioToolbox CoreAudio CoreMotion \
              GameController CoreHaptics CoreBluetooth; do echo -framework $f; done) \
-  -Wl,-platform_version,$PLATFORM,17.0,18.0 -o "$APP/probe"
+  -o "$APP/probe"
 PROBE_ID=$(python3 tools/ios_bundle_id.py --probe)
 sed -e 's/@EXECUTABLE@/probe/' -e "s|@IDENTIFIER@|$PROBE_ID|" -e 's/@NAME@/P2 Probe/' \
     -e "s/@PLATFORM@/$PLIST/" ios/Info.plist.in > "$APP/Info.plist"

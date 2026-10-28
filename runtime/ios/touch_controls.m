@@ -12,18 +12,21 @@
 // - stick droit : caméra, mouvements de souris relatifs à vitesse
 //   proportionnelle à l'inclinaison (courbe quadratique pour viser finement) ;
 //   chaque stick se centre là où le doigt se pose, dans sa moitié d'écran ;
-//   un bouton bascule la moitié droite en trackpad : le glissement du doigt
-//   devient directement le mouvement de souris (choix retenu entre parties,
-//   P2TouchTrackpad dans les réglages de l'app) ;
-// - portails : tapes au dos (ci-dessous) ; sans capteur de mouvement
-//   (simulateur) ou avec P2_BACKTAP=0, une paire de boutons bleu (clic gauche)
-//   / orange (clic droit) dans chaque coin du haut ;
+//   un bouton (en haut à gauche) bascule la moitié droite en trackpad : le glissement du doigt
+//   devient directement le mouvement de souris (mode par défaut, choix retenu
+//   entre parties, P2TouchTrackpad dans les réglages de l'app) ;
+// - portails : par défaut, une paire de boutons bleu (clic gauche)
+//   / orange (clic droit) sous le bouton « utiliser », à droite ;
 // - icônes : sauter (espace), s'accroupir (Ctrl gauche), utiliser (E),
 //   pause (Échap) ;
 // - tapes au dos ou sur les côtés du téléphone (index derrière, en paysage) :
 //   à gauche portail bleu, à droite orange ; détection dans back_tap.c,
-//   nourrie ici par CoreMotion (P2_BACKTAP=0 la coupe, réglages dans
-//   docs/ios.md).
+//   nourrie ici par CoreMotion (sur demande : P2_BACKTAP=1, réglages dans
+//   docs/ios.md) ;
+// - visée au gyroscope : tourner le téléphone tourne la caméra (P2_GYRO,
+//   multiplicateur, 0 la coupe), mêmes échantillons CoreMotion ; un bouton à
+//   côté de celui du mode de la caméra (en haut à gauche) la suspend ou la
+//   reprend (retenu).
 // Avec une manette ou un clavier connecté, elle se cache jusqu'au premier
 // toucher ; avec une vraie manette, la manette virtuelle est retirée pour que
 // le jeu ne lise qu'elle. P2_TOUCH_CONTROLS=0 la désactive, =1 l'affiche toujours ; P2_TOUCH_LOOK règle la vitesse
@@ -54,9 +57,9 @@ int rt_ios_move_response(void);
 void rt_ios_console_command(const char *name);   // game_state.c
 
 typedef enum { ROLE_MOVE, ROLE_LOOK, ROLE_BUTTON } Role;
-typedef enum { KEY_SPACE, KEY_CTRL, KEY_E, KEY_ESCAPE, MOUSE_LEFT, MOUSE_RIGHT, LOOK_MODE, ACTION_COUNT } Action;
+typedef enum { KEY_SPACE, KEY_CTRL, KEY_E, KEY_ESCAPE, MOUSE_LEFT, MOUSE_RIGHT, LOOK_MODE, GYRO_MODE, ACTION_COUNT } Action;
 typedef struct { Action action; NSString *symbol; UIColor *color; CGPoint at; CGFloat size; } Button;
-enum { MAX_BUTTONS = 10 };
+enum { MAX_BUTTONS = 12 };
 
 // Manette virtuelle : deux axes seulement (stick gauche), aucun bouton, pour
 // qu'elle ne porte aucune autre commande que le déplacement.
@@ -85,6 +88,7 @@ static const CGFloat kButtonSize = 54, kPortalSize = 60;
 static const float kStickLook = 90;      // comptes de souris par image, stick à fond (≈ 360°/s à la sensibilité 3 du jeu)
 static const float kTrackpadLook = 3.5f; // comptes de souris par point de glissement
 static NSString *const kTrackpadKey = @"P2TouchTrackpad";
+static NSString *const kGyroOnKey = @"P2GyroOn";   // bouton de la surcouche (la sensibilité vient de P2_GYRO)
 static float look_speed(void) {
     static float speed;
     if (!speed) { const char *e = getenv("P2_TOUCH_LOOK"); speed = e && atof(e) > 0 ? (float)atof(e) : 1.0f; }
@@ -132,8 +136,9 @@ static void redraw(UIView *view) {
 // connaît l'état menu/jeu. Les débuts et fins de toucher arrivent du thread
 // principal : verrou autour du détecteur. Pas d'autorisation à demander pour
 // ces capteurs (seule l'activité physique, CMMotionActivityManager, en exige une).
-static CMMotionManager *backtap_motion;
+static CMMotionManager *backtap_motion;   // capteurs démarrés (tapes au dos et/ou gyroscope)
 static NSOperationQueue *backtap_queue;
+static int backtap_on;                    // tapes au dos actives (P2_BACKTAP)
 static os_unfair_lock backtap_lock = OS_UNFAIR_LOCK_INIT;
 static rt_backtap backtap_detector;
 static _Atomic int backtap_orient;    // +1 : axe y de l'appareil vers la droite de l'écran
@@ -189,15 +194,67 @@ static void backtap_log_sample(const rt_backtap_sample *s, const rt_backtap_repo
     n->window = s->t; n->sq = 0; n->max_a = n->max_jerk = n->max_rot = 0; n->samples = 0;
 }
 
-// Démarre les capteurs (thread principal). Sans capteur (simulateur) : rien.
+// ---- visée au gyroscope ----
+// La rotation du téléphone devient celle de la caméra : 1 pour 1 à la
+// sensibilité 3 du jeu, multipliée par P2_GYRO (Réglages ; 0 la coupe).
+// L'axe vertical de l'écran vient de la gravité, comme dans UZDoom
+// (GyroscopeHandler.swift) : en paysage, la gravité tire vers le bas de
+// l'écran, donc le long de l'axe x des capteurs sur un iPhone ordinaire, de
+// leur axe y quand l'écran est tourné de 90° par rapport à eux (iPhone Duo
+// déplié) ; UIKit ne donne pas cette relation. Tourner, c'est la rotation
+// autour de cet axe ; viser en haut ou en bas, autour de l'autre axe du plan de
+// l'écran. Téléphone presque à plat (gravité hors du plan de l'écran) : la
+// dernière lecture est gardée. Sous P2_GYRO_DEADZONE rad/s, rien (dérive).
+static const float kDegreesPerCount = 0.066f;   // m_yaw 0.022 × sensibilité 3
+static float gyro_gain, gyro_deadzone;           // 0 : visée au gyroscope coupée
+static os_unfair_lock gyro_lock = OS_UNFAIR_LOCK_INIT;
+static double gyro_turn, gyro_pitch;             // radians accumulés (droite, bas), lus par step
+static struct { int vertical_is_x; double sign, last_t; } gyro_axes = {1, -1, 0};
+
+static void gyro_init(void) {
+    const char *e = getenv("P2_GYRO");
+    gyro_gain = e && *e ? fmaxf(0, (float)atof(e)) : 1;
+    gyro_deadzone = env_float("P2_GYRO_DEADZONE", 0.02f, 0);
+}
+static double gyro_dead(double rate) {
+    double m = fabs(rate) - gyro_deadzone;
+    return m > 0 ? copysign(m, rate) : 0;
+}
+// File des capteurs.
+static void gyro_feed(CMDeviceMotion *m) {
+    CMAcceleration g = m.gravity;
+    CMRotationRate w = m.rotationRate;
+    if (sqrt(g.x * g.x + g.y * g.y) > 0.3) {
+        gyro_axes.vertical_is_x = fabs(g.x) >= fabs(g.y);
+        gyro_axes.sign = (gyro_axes.vertical_is_x ? g.x : g.y) < 0 ? -1 : 1;
+    }
+    double dt = gyro_axes.last_t ? fmin(m.timestamp - gyro_axes.last_t, 0.05) : 0;
+    gyro_axes.last_t = m.timestamp;
+    if (dt <= 0) return;
+    double turn, pitch, sign = gyro_axes.sign;
+    if (gyro_axes.vertical_is_x) turn = w.x * sign, pitch = -w.y * sign;
+    else turn = w.y * sign, pitch = w.x * sign;   // écran tourné de 90° : mêmes signes dans les deux sens
+    os_unfair_lock_lock(&gyro_lock);
+    gyro_turn += gyro_dead(turn) * dt;
+    gyro_pitch += gyro_dead(pitch) * dt;
+    os_unfair_lock_unlock(&gyro_lock);
+}
+
+// Démarre les capteurs (thread principal) pour les tapes au dos et la visée au
+// gyroscope. Sans capteur (simulateur) : rien.
 static void backtap_start(void) {
     const char *off = getenv("P2_BACKTAP");
-    if (backtap_motion || (off && *off == '0')) return;
+    if (backtap_motion) return;
+    gyro_init();
+    int backtap = off && *off == '1';   // sur demande : les boutons de portail tirent par défaut
+    if (!backtap && !gyro_gain) return;
     CMMotionManager *motion = [CMMotionManager new];
     if (!motion.deviceMotionAvailable) {
-        fprintf(stderr, "[ios] tapes au dos : pas de capteur de mouvement (simulateur ?)\n");
+        fprintf(stderr, "[ios] tapes au dos, gyroscope : pas de capteur de mouvement (simulateur ?)\n");
         return;
     }
+    if (gyro_gain) fprintf(stderr, "[ios] visée au gyroscope : ×%g, zone morte %g rad/s\n", gyro_gain, gyro_deadzone);
+    backtap_on = backtap;
     rt_backtap_params p;
     rt_backtap_defaults(&p);
     // Sensibilité (Réglages : 0,75 / 1 / 1,33) : seuils de détection divisés
@@ -232,7 +289,7 @@ static void backtap_start(void) {
         if (backtap_raw) setvbuf(backtap_raw, NULL, _IOLBF, 0);   // tout est écrit si le jeu est tué
         if (backtap_raw) fprintf(backtap_raw, "# m t ax ay az wx wy wz gx gy gz orient active | t t_toucher\n");
     }
-    float hz = env_float("P2_BACKTAP_HZ", 200, 10);
+    float hz = env_float("P2_BACKTAP_HZ", backtap_on ? 200 : 100, 10);
     rt_backtap_init(&backtap_detector, &p);
 
     backtap_queue = [NSOperationQueue new];
@@ -240,7 +297,7 @@ static void backtap_start(void) {
     backtap_queue.maxConcurrentOperationCount = 1;
     backtap_queue.qualityOfService = NSQualityOfServiceUserInteractive;
     motion.deviceMotionUpdateInterval = 1.0 / hz;
-    fprintf(stderr, "[ios] tapes au dos : %g Hz demandés ; seuils %.3g g, %.3g g/s, rotation %.3g rad/s ; "
+    if (backtap_on) fprintf(stderr, "[ios] tapes au dos : %g Hz demandés ; seuils %.3g g, %.3g g/s, rotation %.3g rad/s ; "
             "gyroscope %.3g g, %.3g rad/s, %.3g rad/s² ; "
             "réfractaire %.0f ms, toucher ±%.0f ms, à plat sous %.2f g, durée %.0f ms, agitation %.3g g, gravité %.3g g ; "
             "latéral %+d, z %+d, inversé %d, appui %.0f ms%s\n",
@@ -249,6 +306,8 @@ static void backtap_start(void) {
             backtap_log ? ", journal" : "");
     [motion startDeviceMotionUpdatesToQueue:backtap_queue withHandler:^(CMDeviceMotion *m, NSError *error) {
         if (!m) { if (error) fprintf(stderr, "[ios] tapes au dos : %s\n", error.localizedDescription.UTF8String); return; }
+        if (gyro_gain) gyro_feed(m);
+        if (!backtap_on) return;
         CMAcceleration a = m.userAcceleration, g = m.gravity;
         CMRotationRate w = m.rotationRate;
         rt_backtap_sample s = {m.timestamp, {(float)a.x, (float)a.y, (float)a.z},
@@ -266,7 +325,7 @@ static void backtap_start(void) {
     backtap_motion = motion;
 }
 static void backtap_touch(NSSet<UITouch *> *touches) {
-    if (!backtap_motion) return;
+    if (!backtap_on) return;
     os_unfair_lock_lock(&backtap_lock);
     for (UITouch *t in touches) {
         rt_backtap_touch(&backtap_detector, t.timestamp);
@@ -297,6 +356,7 @@ static void backtap_touch(NSSet<UITouch *> *touches) {
     NSTimer *tick;            // caméra : un pas par image tant que le stick est incliné
     float lookCarry[2];       // fractions de comptes de souris reportées
     BOOL trackpad;            // moitié droite en trackpad plutôt qu'en stick
+    BOOL gyroOn;              // visée au gyroscope active (bouton de la surcouche)
     BOOL physicalPad;         // vraie manette connectée
     int fps;                  // compteur d'images affiché (0 : rien à afficher)
     int fpsHidden;            // masqué : P2_SHOW_FPS=0 (Réglages) ou toucher du coin haut gauche
@@ -320,7 +380,11 @@ static void backtap_touch(NSSet<UITouch *> *touches) {
         self.multipleTouchEnabled = YES; self.backgroundColor = UIColor.clearColor; self.opaque = NO;
         self.contentMode = UIViewContentModeRedraw;
         fingers = [NSMapTable strongToStrongObjectsMapTable];
-        trackpad = [NSUserDefaults.standardUserDefaults boolForKey:kTrackpadKey];
+        // Trackpad par défaut (glissement direct) ; le stick droit reste au choix.
+        id saved = [NSUserDefaults.standardUserDefaults objectForKey:kTrackpadKey];
+        trackpad = saved ? [saved boolValue] : YES;
+        saved = [NSUserDefaults.standardUserDefaults objectForKey:kGyroOnKey];
+        gyroOn = saved ? [saved boolValue] : YES;
         NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
         for (NSNotificationName name in @[GCControllerDidConnectNotification, GCControllerDidDisconnectNotification,
                                           GCKeyboardDidConnectNotification, GCKeyboardDidDisconnectNotification])
@@ -364,6 +428,7 @@ static void backtap_touch(NSSet<UITouch *> *touches) {
     if (pad && rt_ios_move_response() != padResponse) { padResponse = rt_ios_move_response(); [self updateMove]; }
     [self testStep];
     [self backTapStep];
+    [self gyroStep];
     if (host.subviews.lastObject != self) [host bringSubviewToFront:self];
     if (!CGRectEqualToRect(self.frame, host.bounds)) { self.frame = host.bounds; redraw(self); }
     if (trackpad) return;   // trackpad : mouvements envoyés au glissement (touchesMoved)
@@ -390,7 +455,7 @@ static void backtap_touch(NSSet<UITouch *> *touches) {
 // tombent dans la même image). Passe par action: comme un bouton tenu : si un
 // doigt tient déjà ce portail, rien n'est renvoyé au jeu.
 - (void)backTapStep {
-    if (!backtap_motion) return;
+    if (!backtap_on) return;
     UIInterfaceOrientation o = self.window.windowScene.interfaceOrientation;
     atomic_store(&backtap_orient, o == UIInterfaceOrientationLandscapeLeft ? 1 : o == UIInterfaceOrientationLandscapeRight ? -1 : 0);
     atomic_store(&backtap_active, !menu && !concealed);
@@ -409,6 +474,23 @@ static void backtap_touch(NSSet<UITouch *> *touches) {
     [self action:(Action)backtapHeld down:NO];
     backtapHeld = -1;
     redraw(self);
+}
+// Visée au gyroscope : rotation accumulée depuis l'image précédente, en
+// mouvement de souris ; jetée dans les menus.
+- (void)gyroStep {
+    if (!gyro_gain) return;
+    os_unfair_lock_lock(&gyro_lock);
+    double turn = gyro_turn, pitch = gyro_pitch;
+    gyro_turn = gyro_pitch = 0;
+    os_unfair_lock_unlock(&gyro_lock);
+    if (menu || !gyroOn) return;
+    float k = (float)(180 / M_PI) / kDegreesPerCount * gyro_gain;
+    [self lookBy:(float)turn * k y:(float)pitch * k];
+}
+- (void)toggleGyro {
+    gyroOn = !gyroOn;
+    [NSUserDefaults.standardUserDefaults setBool:gyroOn forKey:kGyroOnKey];
+    fprintf(stderr, "[ios] visée au gyroscope : %s\n", gyroOn ? "reprise" : "suspendue");
 }
 - (void)toggleLookMode {
     trackpad = !trackpad;
@@ -457,6 +539,7 @@ static void backtap_touch(NSSet<UITouch *> *touches) {
     case MOUSE_LEFT: [self mouseButton:SDL_BUTTON_LEFT down:down at:centre]; break;
     case MOUSE_RIGHT: [self mouseButton:SDL_BUTTON_RIGHT down:down at:centre]; break;
     case LOOK_MODE: if (down) [self toggleLookMode]; break;
+    case GYRO_MODE: if (down) [self toggleGyro]; break;
     default: break;
     }
 }
@@ -477,30 +560,37 @@ static BOOL portal_buttons(void) {
     const char *e = getenv("P2_PORTAL_BUTTONS");
     if (e && *e == '1') return YES;
     if (e && *e == '0') return NO;
-    return backtap_motion == nil;
+    return !backtap_on;
 }
 - (int)buttons:(Button *)b {
     CGRect a = self.area; CGFloat x = CGRectGetMinX(a), y = CGRectGetMinY(a), w = a.size.width, h = a.size.height;
     UIColor *blue = [UIColor colorWithRed:.16 green:.55 blue:1 alpha:.6], *orange = [UIColor colorWithRed:1 green:.55 blue:.05 alpha:.6];
     UIColor *ink = [UIColor colorWithWhite:0 alpha:.35];   // fond sombre : icônes lisibles sur un mur clair
-    CGFloat top = y + h * .19, gap = kPortalSize * 1.15;   // sous le compteur d'images
+    // Portails sous le bouton « utiliser » (E, à 80 % de la hauteur), sans
+    // sortir de la zone sûre sur un écran bas : orange dessous, bleu à sa gauche.
+    CGFloat use = y + h * .80, gap = kPortalSize * 1.15;
+    CGFloat fire = MIN(use + (kButtonSize + kPortalSize) / 2 + 6, y + h - kPortalSize * .55);
+    CGFloat toggles = CGRectGetMaxY([self fpsCorner]) + kButtonSize * .45 + 4;
     Button all[] = {
-        // Portails, en miroir : bleu à l'extérieur, orange à l'intérieur, des deux côtés.
-        {MOUSE_LEFT, nil, blue, {x + w * .06, top}, kPortalSize}, {MOUSE_RIGHT, nil, orange, {x + w * .06 + gap, top}, kPortalSize},
-        {MOUSE_LEFT, nil, blue, {x + w * .94, top}, kPortalSize}, {MOUSE_RIGHT, nil, orange, {x + w * .94 - gap, top}, kPortalSize},
+        {MOUSE_LEFT, nil, blue, {x + w * .94 - gap, fire}, kPortalSize}, {MOUSE_RIGHT, nil, orange, {x + w * .94, fire}, kPortalSize},
         {KEY_SPACE, @"arrow.up", ink, {x + w * .94, y + h * .50}, kButtonSize},
         {KEY_CTRL, @"arrow.down", ink, {x + w * .80, y + h * .40}, kButtonSize},
-        {KEY_E, @"hand.point.up.left.fill", ink, {x + w * .94, y + h * .80}, kButtonSize},
+        {KEY_E, @"hand.point.up.left.fill", ink, {x + w * .94, use}, kButtonSize},
         {KEY_ESCAPE, @"pause.fill", ink, {x + w - kButtonSize * .45, y + kButtonSize * .45}, kButtonSize * .75},
-        // Mode de la caméra, dans le coin en bas à gauche : l'icône montre le mode actuel.
+        // Mode de la caméra, en haut à gauche sous le coin du compteur d'images
+        // (loin des pouces en jeu) : l'icône montre le mode actuel.
         {LOOK_MODE, trackpad ? @"hand.draw.fill" : @"r.joystick.fill", ink,
-         {x + kButtonSize * .45, y + h - kButtonSize * .45}, kButtonSize * .75},
+         {x + kButtonSize * .45, toggles}, kButtonSize * .75},
+        // Visée au gyroscope, juste à droite : pâle quand elle est suspendue.
+        {GYRO_MODE, @"gyroscope", gyroOn ? ink : [UIColor colorWithWhite:0 alpha:.12],
+         {x + kButtonSize * 1.3, toggles}, kButtonSize * .75},
     };
     int n = 0;
     for (int i = 0; i < (int)(sizeof(all) / sizeof(*all)) && n < MAX_BUTTONS; ++i) {
         // Les tapes au dos tirent les portails : leurs boutons ne servent que sans
         // elles, sauf choix contraire (P2_PORTAL_BUTTONS=1 toujours, =0 jamais).
         if ((all[i].action == MOUSE_LEFT || all[i].action == MOUSE_RIGHT) && !portal_buttons()) continue;
+        if (all[i].action == GYRO_MODE && !(gyro_gain && backtap_motion)) continue;   // coupée, ou sans capteur
         b[n++] = all[i];
     }
     return n;

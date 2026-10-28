@@ -72,10 +72,11 @@ The setting titles below are the ones shown in the app, which is still in French
 | Images par seconde (Frames per second) | `P2_IOS_MAX_FPS` | 60 (default), 120 |
 | Compteur d'images (FPS counter) | `P2_SHOW_FPS` | shown by default; tapping the top-left corner shows or hides it (choice is remembered) |
 | Commandes à l'écran (On-screen controls) | `P2_TOUCH_CONTROLS` | automatic (hidden when a controller is connected), always, never |
-| Caméra en trackpad (Trackpad camera) | key `P2TouchTrackpad` | also toggled by the button at the bottom left |
+| Caméra en trackpad (Trackpad camera) | key `P2TouchTrackpad` | on by default (drag on the right half); off gives the right stick; also toggled by the button at the top left |
 | Vitesse de la caméra (Camera speed) | `P2_TOUCH_LOOK` | ×0.5 to ×3 |
 | Accélération du trackpad (Trackpad acceleration) | `P2_TOUCH_ACCEL` | none (1) to strong (4), normal 2.5 |
-| Tapes au dos (Back taps) | `P2_BACKTAP` | enabled by default |
+| Visée au gyroscope (Gyro aiming) | `P2_GYRO` | off (0), ×0.5 to ×3, normal 1 (1:1 rotation at the game's sensitivity 3); see "Gyro aiming" |
+| Tapes au dos (Back taps) | `P2_BACKTAP` | off by default: the overlay's portal buttons fire |
 | Sensibilité des tapes (Tap sensitivity) | `P2_BACKTAP_SENSITIVITY` | 0.75 / 1 / 1.33: thresholds are divided by this value |
 | Inverser gauche et droite (Swap left and right) | `P2_BACKTAP_INVERT` | |
 | Boutons de portail (Portal buttons) | `P2_PORTAL_BUTTONS` | automatic (when back taps are off), always, never |
@@ -95,7 +96,7 @@ translation and that the keys match between the code and the settings page.
 | `P2_TRACE_FILES=<text>` | fopen/open/unlink/rename calls whose path contains the text |
 | `P2_TOUCH_CONTROLS=0/1` | touch controls disabled / always shown |
 | `P2_TOUCH_ACCEL=2.5` (+ `_LOW=300`, `_HIGH=1500`, `_SMOOTH=0.5`, `_LOG=1`) | trackpad acceleration: gain of 1 below `_LOW` pt/s, ramping up to the `P2_TOUCH_ACCEL` multiplier at `_HIGH` pt/s; speed is smoothed (weight `_SMOOTH`); `=1` disables it, `_LOG` logs speed and gain |
-| `P2_BACKTAP=0` | disables back taps (enabled by default if the sensor exists; see "Back taps") |
+| `P2_BACKTAP=1` | enables back taps (off by default; see "Back taps") |
 | `P2_BACKTAP_LOG=1` | logs every candidate (from half the thresholds) and the background noise every 5 s |
 | `P2_TOUCH_TEST_CLICK=s,x,y` | left click at (x, y) points, s seconds after the first menu |
 | `P2_TOUCH_TEST_MOVE=0.5,1` (+ `_SECONDS`, `_DELAY`, `_ANGLE`, `P2_TOUCH_TEST_WASD`) | forced deflections of the movement stick |
@@ -106,14 +107,29 @@ translation and that the keys match between the code and the settings page.
 Game console: `-condebug` writes it to
 `Documents/portal2-userdata/portal2/console.log`.
 
+## Gyro aiming
+
+Turning the phone turns the camera in gameplay (`runtime/ios/touch_controls.m`,
+on the CoreMotion samples the back taps also use; discarded in menus). The
+screen's vertical axis comes from gravity, as in UZDoom's `GyroscopeHandler`:
+in landscape gravity runs along the device's x axis on a regular iPhone, and
+along its y axis when the screen is rotated 90° from the sensors (unfolded
+iPhone Duo), which UIKit does not report. Turning is rotation about that axis,
+looking up and down rotation about the other in-plane axis; close to flat, the
+last reading is kept. `P2_GYRO_DEADZONE` (0.02 rad/s) drops sensor drift.
+The overlay button next to the camera-mode one (top left, under the FPS counter) pauses or resumes
+it in game; the choice is remembered (`P2GyroOn`).
+Back taps jolt the phone, so a tap also nudges the camera slightly.
+
 ## Back taps
 
 Holding the phone in landscape, tapping the back near the left edge with an
 index finger fires the blue portal, near the right edge the orange one
 (`runtime/ios/back_tap.c`, tested by `tests/checks_back_tap.c`; CoreMotion in
-`touch_controls.m`, on a dedicated queue, no permission required). Back taps
-replace the overlay's portal buttons, which only come back without a motion
-sensor (simulator) or with `P2_BACKTAP=0`. A candidate opens at half the
+`touch_controls.m`, on a dedicated queue, no permission required). Off by
+default (`P2_BACKTAP=1` or the Settings switch turns them on): the overlay's
+portal buttons fire instead, and back taps replace them when enabled (unless
+`P2_PORTAL_BUTTONS=1`). A candidate opens at half the
 thresholds: |user acceleration| and its sample-to-sample change (jerk), or a
 sudden change in rotation around x; it is judged 100 ms later against the full
 thresholds. Two paths: acceleration (0.10 g, 6 g/s) or gyroscope (0.06 g,

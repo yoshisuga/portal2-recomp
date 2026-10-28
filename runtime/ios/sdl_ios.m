@@ -9,6 +9,15 @@
 #include <string.h>
 #include "settings.h"
 
+// Écran du jeu (thread principal) : celui de sa scène. UIScreen.mainScreen peut
+// être un autre écran, d'une autre taille (iPhone Duo : 678×466 points au lieu
+// de 951×669) : menus et touchers décalés.
+UIScreen *rt_ios_screen(void) {
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes)
+        if ([scene isKindOfClass:UIWindowScene.class]) return ((UIWindowScene *)scene).screen;
+    return UIScreen.mainScreen;
+}
+
 // Échelle points -> pixels : celle de l'écran sur appareil. Sur simulateur
 // (rendu OpenGL ES logiciel, 0,5 image/s en 2622×1206), 1 par défaut.
 // Sur appareil, 2 par défaut (voir plus bas). P2_IOS_RENDER_SCALE=1, =native
@@ -25,8 +34,8 @@ float rt_ios_render_scale(void) {
     if (!native_requested && requested <= 1.0f) return scale = 1.0f;
 #endif
     __block CGFloat native = 1;
-    if ([NSThread isMainThread]) native = UIScreen.mainScreen.nativeScale;
-    else dispatch_sync(dispatch_get_main_queue(), ^{ native = UIScreen.mainScreen.nativeScale; });
+    if ([NSThread isMainThread]) native = rt_ios_screen().nativeScale;
+    else dispatch_sync(dispatch_get_main_queue(), ^{ native = rt_ios_screen().nativeScale; });
     if (native <= 1) return scale = 1.0f;
     // Par défaut 2 (iPhone 15 Pro Max : 1864×860 au lieu de 2796×1290) : sans
     // plafond d'écran, 154 i/s contre 90 en natif dans sp_a2_laser_stairs ; le
@@ -38,8 +47,8 @@ static int up(int v) { return (int)lroundf((float)v * rt_ios_render_scale()); }
 // Taille de rendu en paysage : écran en points × échelle (résolution du jeu, ios/main_ios.c).
 void rt_ios_render_size(int *w, int *h) {
     __block CGSize size = CGSizeZero;
-    if ([NSThread isMainThread]) size = UIScreen.mainScreen.bounds.size;
-    else dispatch_sync(dispatch_get_main_queue(), ^{ size = UIScreen.mainScreen.bounds.size; });
+    if ([NSThread isMainThread]) size = rt_ios_screen().bounds.size;
+    else dispatch_sync(dispatch_get_main_queue(), ^{ size = rt_ios_screen().bounds.size; });
     *w = up((int)fmax(size.width, size.height));
     *h = up((int)fmin(size.width, size.height));
 }
@@ -89,11 +98,46 @@ Uint32 rt_ios_get_mouse_state(int *x, int *y) {
 }
 void rt_ios_warp_mouse_in_window(SDL_Window *window, int x, int y) { SDL_WarpMouseInWindow(window, down(x), down(y)); }
 
+// Toucher dans les menus : SDL envoie déplacement, appui et souvent relâchement
+// dans la même image, et les listes du jeu (menu pause : « Reprendre la partie »…)
+// n'activent que l'élément déjà survolé à une image précédente. Les événements
+// souris issus d'un toucher sont donc étalés comme P2_TOUCH_TEST_CLICK : un
+// changement de bouton par image, jamais dans l'image d'un déplacement.
+// Une image = les appels jusqu'à ce que la file soit vide.
+static int is_button(const SDL_Event *e) { return e->type == SDL_MOUSEBUTTONDOWN || e->type == SDL_MOUSEBUTTONUP; }
+static int is_touch_mouse(const SDL_Event *e) {
+    if (e->type == SDL_MOUSEMOTION) return e->motion.which == SDL_TOUCH_MOUSEID;
+    return is_button(e) && e->button.which == SDL_TOUCH_MOUSEID;
+}
+static int poll_paced(SDL_Event *event) {
+    static SDL_Event held[32];
+    static int count, new_frame = 1, moved, pressed;
+    if (!event) return count > 0 || SDL_PollEvent(NULL);
+    if (new_frame) new_frame = 0, moved = pressed = 0;
+    if (count && !(is_button(&held[0]) && (moved || pressed))) {
+        *event = held[0];
+        memmove(held, held + 1, (size_t)--count * sizeof(*held));
+        if (is_button(event)) pressed = 1; else moved = 1;
+        return 1;
+    }
+    for (SDL_Event e;;) {
+        if (!SDL_PollEvent(&e)) { new_frame = 1; return 0; }
+        if (!is_touch_mouse(&e)) { *event = e; return 1; }
+        if (count || (is_button(&e) && (moved || pressed))) {
+            if (count < (int)SDL_arraysize(held)) held[count++] = e;
+            continue;
+        }
+        if (is_button(&e)) pressed = 1; else moved = 1;
+        *event = e;
+        return 1;
+    }
+}
+
 // Positions absolues et tailles de fenêtre en pixels ; les déplacements
 // relatifs (visée) gardent leur échelle, pour ne pas tripler la sensibilité.
 int rt_ios_poll_event(SDL_Event *event) {
     rt_ios_game_state_poll();   // menus/chargement ou partie (game_state.c), pour les commandes tactiles
-    int got = SDL_PollEvent(event);
+    int got = poll_paced(event);
     if (!got || !event || rt_ios_render_scale() <= 1) return got;
     switch (event->type) {
     case SDL_MOUSEMOTION: event->motion.x = up(event->motion.x); event->motion.y = up(event->motion.y); break;
