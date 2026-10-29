@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Construit Portal 2 recompilé en application iOS (simulateur arm64 par défaut).
+"""Construit le jeu recompilé (Portal 2, Half-Life 2) en application iOS (simulateur arm64 par défaut).
 
 Même C généré que le build macOS (tools/build_game.py, génération et cache
 d'objets réutilisés sans modification), compilé pour iOS et lié avec les
@@ -29,6 +29,20 @@ import build_game
 ROOT = Path(__file__).resolve().parent.parent
 FRAMEWORKS = ['UIKit', 'Foundation', 'CoreGraphics', 'QuartzCore', 'OpenGLES', 'Metal', 'AVFoundation',
               'AudioToolbox', 'CoreAudio', 'CoreMotion', 'GameController', 'CoreHaptics', 'CoreBluetooth', 'OpenAL']
+# Jeu choisi par config/local.json (« game ») : nom affiché, paquet, exécutable,
+# app Steam. Portal 2 par défaut.
+GAMES = {
+    'portal2': dict(name='Portal 2', bundle='Portal2', executable='portal2', appid=620),
+    'hl2': dict(name='Half-Life 2', bundle='HalfLife2', executable='hl2', appid=220),
+}
+
+
+def game():
+    config = json.loads(Path(ROOT / 'config/local.json').read_text()) if (ROOT / 'config/local.json').exists() else {}
+    key = config.get('game', 'portal2')
+    return key, GAMES[key]
+
+
 TARGETS = {
     'sim': dict(sdk='iphonesimulator', triple='arm64-apple-ios17.0-simulator',
                 plist='iPhoneSimulator'),
@@ -60,7 +74,9 @@ def main():
                                       layout, build_game.roots(layout))
     base = ['-target', target['triple'], '-isysroot', sdk]
     memory = ['-DRT_FAST_MEMORY'] if args.fast_memory else []
-    runtime_flags = [*base, f'-O{args.opt}', '-g', *build_game.WARNINGS, *memory, '-Iruntime', '-Iruntime/ios',
+    key, info = game()
+    identity_flags = [f'-DRT_GAME_DIR="{key}"', f'-DRT_GAME_{key.upper()}=1', f'-DRT_STEAM_APP_ID={info["appid"]}']
+    runtime_flags = [*base, f'-O{args.opt}', '-g', *build_game.WARNINGS, *memory, *identity_flags, '-Iruntime', '-Iruntime/ios',
                      f'-I{deps}/include', f'-I{deps}/include/SDL2', f'-I{deps}/include/gl4es',
                      f'-I{deps}/include/freetype2', '-DGL_SILENCE_DEPRECATION', '-DGLES_SILENCE_DEPRECATION',
                      '-DOPENAL_DEPRECATED=', '-DAL_SILENCE_DEPRECATION']
@@ -81,41 +97,41 @@ def main():
     objects, compiled, cpu = build_game.compile_units(units, cache, args.jobs, identity)
     print(f'{compiled}/{len(units)} fichiers compilés ({cpu:.0f} s CPU)')
 
-    app = Path(f'build/ios/{args.target}/Portal2.app')
+    app = Path(f'build/ios/{args.target}/{info["bundle"]}.app')
     app.mkdir(parents=True, exist_ok=True)
     response = Path(f'build/ios/{args.target}/link.rsp')
     response.write_text('\n'.join(str(o) for o in objects) + '\n')
     libs = [str(deps / 'lib' / n) for n in ('libSDL2main.a', 'libSDL2.a', 'libgl4es.a', 'libfreetype.a')]
     link = ['clang', *base, f'@{response}', *libs, '-liconv',
             *[x for f in FRAMEWORKS for x in ('-framework', f)],
-            '-o', str(app / 'portal2')]
+            '-o', str(app / info['executable'])]
     subprocess.run(link, check=True)
     plist = (ROOT / 'ios/Info.plist.in').read_text()
-    for key, value in dict(EXECUTABLE='portal2', IDENTIFIER=bundle_id(), NAME='Portal 2',
-                           PLATFORM=target['plist']).items():
-        plist = plist.replace(f'@{key}@', value)
+    for name, value in dict(EXECUTABLE=info['executable'], IDENTIFIER=bundle_id(), NAME=info['name'],
+                            PLATFORM=target['plist']).items():
+        plist = plist.replace(f'@{name}@', value)
     (app / 'Info.plist').write_text(plist)
     # Page du jeu dans l'app Réglages d'iOS (lue par runtime/ios/settings.c).
     shutil.copytree(ROOT / 'ios/Settings.bundle', app / 'Settings.bundle', dirs_exist_ok=True)
-    app_icon(app)
+    app_icon(app, key)
     # Lancement depuis l'écran d'accueil : arguments du jeu par défaut (les
     # dossiers de données sont ajoutés par ios/main_ios.c).
-    (app / 'launch.args').write_text('--\n-game\nportal2\n-novid\n-fullscreen\n')
+    (app / 'launch.args').write_text(f'--\n-game\n{key}\n-novid\n-fullscreen\n')
     if args.target == 'sim':
         subprocess.run(['codesign', '-s', '-', '-f', str(app)], check=True, capture_output=True)
     else:
         subprocess.run([sys.executable, str(ROOT / 'ios/signing/sign.py'), str(app)], check=True)
-    size = (app / 'portal2').stat().st_size
+    size = (app / info['executable']).stat().st_size
     print(f'{app} : exécutable {size / 1e6:.0f} Mo, {time.time() - started:.0f} s au total')
 
 
-def app_icon(app):
-    """Icône de l'app tirée de l'icône macOS du jeu (portal2/resource/game.icns) :
+def app_icon(app, key):
+    """Icône de l'app tirée de l'icône macOS du jeu (<jeu>/resource/game.icns) :
     une image de Valve, prise dans la copie du joueur au lieu d'être versionnée.
     Fichiers à l'ancienne (CFBundleIconFiles d'ios/Info.plist.in), sans
     catalogue d'images. Sans le fichier : icône par défaut d'iOS."""
     config = json.loads(Path('config/local.json').read_text()) if Path('config/local.json').exists() else {}
-    icns = Path(config.get('game_root', '')) / 'portal2/resource/game.icns'
+    icns = Path(config.get('game_root', '')) / key / 'resource/game.icns'
     if not icns.is_file():
         print(f'icône : {icns} absent, icône par défaut')
         return

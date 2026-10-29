@@ -1,7 +1,7 @@
 #!/bin/bash
-# Portal 2 sur un appareil iOS réel, par câble (xcrun devicectl).
+# Le jeu (Portal 2, Half-Life 2) sur un appareil iOS réel, par câble (xcrun devicectl).
 #   tools/ios_device.sh probe [VAR=valeur...]   sonde (P2_PROBE_CLIP=1 : découpe au plan proche)
-#   tools/ios_device.sh install                  installe build/ios/device/Portal2.app
+#   tools/ios_device.sh install                  installe build/ios/device/<Jeu>.app
 #   tools/ios_device.sh data                     copie les données dans Documents (prep, game, linux)
 #   tools/ios_device.sh run [secondes] [VAR=valeur...]   lance, puis rapatrie Documents/game.log
 # Appareil : P2_DEVICE (UDID ou nom), sinon le premier iPhone/iPad connecté.
@@ -14,6 +14,8 @@ APP_ID=$(python3 tools/ios_bundle_id.py)
 PROBE_ID=$(python3 tools/ios_bundle_id.py --probe)
 GAME_ROOT=$(python3 -c "import json;print(json.load(open('config/local.json'))['game_root'])")
 LINUX_ROOT=$(python3 -c "import json;print(json.load(open('config/local.json'))['linux_root'])")
+GAME=$(python3 -c "import json;print(json.load(open('config/local.json')).get('game','portal2'))")
+APP=build/ios/device/$(python3 -c "import sys;sys.path.insert(0,'tools');import build_ios;print(build_ios.GAMES['$GAME']['bundle'])").app
 dc() {  # sous-commande de trois mots, --device, puis le reste (options et arguments)
   xcrun devicectl "${@:1:3}" --device "$DEVICE" "${@:4}"
 }
@@ -37,13 +39,18 @@ probe)
   cat build/ios/device/probe.log
   ;;
 install)
-  dc device install app build/ios/device/Portal2.app
+  dc device install app "$APP"
   ;;
 data)
-  # Sans la bande son ni sdk_content (inutiles au jeu) : ~11,5 Go.
+  # Portal 2 sans la bande son ni sdk_content (inutiles au jeu) : ~11,5 Go.
+  # Half-Life 2 sans les épisodes ni Lost Coast : ~4,8 Go.
   copy_to $APP_ID build/game/prep Documents/prep
   copy_to $APP_ID "$LINUX_ROOT" Documents/linux
-  for d in bin platform update portal2 portal2_dlc1 portal2_dlc2; do
+  case "$GAME" in
+    hl2) FOLDERS="bin platform hl2" ;;
+    *) FOLDERS="bin platform update portal2 portal2_dlc1 portal2_dlc2" ;;
+  esac
+  for d in $FOLDERS; do
     [ -e "$GAME_ROOT/$d" ] && copy_to $APP_ID "$GAME_ROOT/$d" "Documents/game/$d"
   done
   ;;

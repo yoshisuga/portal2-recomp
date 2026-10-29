@@ -149,6 +149,20 @@ static const char *get_string(const FcPattern *p, const char *object) {
 // ---------------------------------------------------------------- configuration
 FcBool FcInit(void) { pthread_once(&once, build_index); return FcTrue; }
 FcConfig *FcConfigGetCurrent(void) { FcInit(); return &config; }
+// Half-Life 2 crée sa configuration pour y ajouter ses polices (resource/*.ttf) :
+// une seule configuration, l'index commun, la police ajoutée à l'index.
+FcConfig *FcInitLoadConfigAndFonts(void) { FcInit(); return &config; }
+FcBool FcConfigSetCurrent(FcConfig *current) { (void)current; FcInit(); return FcTrue; }
+FcBool FcConfigAppFontAddFile(FcConfig *current, const FcChar8 *file) {
+    (void)current;
+    FcInit();
+    FT_Library library;
+    if (!file || FT_Init_FreeType(&library)) return FcFalse;
+    int before = font_count;
+    add_font(library, (const char *)file);
+    FT_Done_FreeType(library);
+    return font_count > before;
+}
 FcBool FcConfigSubstitute(FcConfig *c, FcPattern *p, FcMatchKind kind) { (void)c; (void)p; (void)kind; return FcTrue; }
 void FcDefaultSubstitute(FcPattern *p) { (void)p; }
 

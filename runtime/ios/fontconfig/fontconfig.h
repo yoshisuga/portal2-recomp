@@ -38,6 +38,9 @@ typedef struct { int nfont; int sfont; FcPattern **fonts; } FcFontSet;
 
 FcBool FcInit(void);
 FcConfig *FcConfigGetCurrent(void);
+FcConfig *FcInitLoadConfigAndFonts(void);
+FcBool FcConfigSetCurrent(FcConfig *config);
+FcBool FcConfigAppFontAddFile(FcConfig *config, const FcChar8 *file);
 FcBool FcConfigSubstitute(FcConfig *config, FcPattern *p, FcMatchKind kind);
 void FcDefaultSubstitute(FcPattern *pattern);
 FcPattern *FcPatternCreate(void);

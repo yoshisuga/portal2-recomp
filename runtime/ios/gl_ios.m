@@ -9,6 +9,7 @@
 #include <SDL.h>
 #include <SDL_syswm.h>
 #include <dlfcn.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
@@ -133,14 +134,50 @@ static void shader_source(GLuint shader, GLsizei count, const GLchar *const *str
             }
         }
     }
+    // P2_IOS_DEBUG_SPLIT=1 : les shaders de fragments à lightmap (unités 0, 1 et
+    // 12) affichent en bandes verticales répétées tous les 600 pixels la texture
+    // de base, la lightmap (x4) et la texture de détail, lues telles quelles.
+    if (converted && type == GL_FRAGMENT_SHADER && getenv("P2_IOS_DEBUG_SPLIT")) {
+        char regs[3][8] = {{0}};
+        static const int units[3] = {0, 1, 12};
+        for (int k = 0; k < 3; ++k) {
+            char pattern[64];
+            snprintf(pattern, sizeof(pattern), " = p2_texture(%d,  sampler%d,", units[k], units[k]);
+            const char *hit = strstr(converted, pattern), *line = hit;
+            while (line && line > converted && line[-1] != '\n') --line;
+            if (hit && hit - line < 8) memcpy(regs[k], line, (size_t)(hit - line));
+        }
+        char *end = strstr(converted, "\nvoid main()");
+        while (end && end > converted && *end != '}') --end;
+        if (regs[0][0] && regs[1][0] && regs[2][0] && end && *end == '}') {
+            size_t head = (size_t)(end - converted);
+            char *debug = malloc(strlen(converted) + 512);
+            if (debug) {
+                memcpy(debug, converted, head);
+                if (getenv("P2_IOS_DEBUG_SPLIT")[0] == '2')   // 2 : texture de base brute, UV, mip 4, taille liée
+                    sprintf(debug + head, "{ float b = fract(gl_FragCoord.x / 800.0);\n"
+                            "gl4es_FragData[0] = vec4(b < 0.25 ? texture(sampler0, oT0.xy).rgb : b < 0.5 ? vec3(fract(oT0.xy), 0.0) :"
+                            " b < 0.75 ? textureLod(sampler0, oT0.xy, 4.0).rgb : vec3(vec2(textureSize(sampler0, 0)) / 1024.0, 0.0), 1.0); }\n%s",
+                            end);
+                else
+                sprintf(debug + head, "{ float b = fract(gl_FragCoord.x / 600.0);\n"
+                        "gl4es_FragData[0] = vec4(b < 0.333 ? %s.rgb : b < 0.667 ? 4.0 * %s.rgb : %s.rgb, 1.0); }\n%s",
+                        regs[0], regs[1], regs[2], end);
+                free(converted); converted = debug;
+            }
+        }
+    }
     const GLchar *one = converted ? converted : joined;
     const char *dump = getenv("P2_IOS_SHADER_DUMP");   // dossier : un fichier par source
     if (dump && *dump) {
         static int counter;
         char path[1024];
-        snprintf(path, sizeof(path), "%s/%05d_%s.glsl", dump, counter++, type == GL_FRAGMENT_SHADER ? "fs" : "vs");
+        const char *home = *dump != '/' && getenv("HOME") ? getenv("HOME") : "";   // relatif : au conteneur (HOME)
+        snprintf(path, sizeof(path), "%s%s%s/%05d_%s.glsl", home, *home ? "/" : "", dump, counter++,
+                 type == GL_FRAGMENT_SHADER ? "fs" : "vs");
         FILE *f = fopen(path, "w");
         if (f) { fputs(one, f); fclose(f); }
+        else if (counter == 1) fprintf(stderr, "[gl-shader] %s : %s\n", path, strerror(errno));
     }
     es_shader_source(shader, 1, &one, NULL);
     free(converted); free(joined);
@@ -167,9 +204,20 @@ static void (*es_tex_image_2d)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GL
 static void (*es_tex_sub_image_2d)(GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void *);
 static void es3_tex_image_2d(GLenum t, GLint l, GLint i, GLsizei w, GLsizei h, GLint b, GLenum f, GLenum ty, const void *d) {
     es_tex_image_2d(t, l, es3_internal(i, f, ty), w, h, b, f, es3_type(ty), d);
+    static int all = -1;   // P2_IOS_GL_TRACE=2 : ce qu'OpenGL ES reçoit vraiment, niveau par niveau
+    if (all < 0) { const char *e = getenv("P2_IOS_GL_TRACE"); all = e && *e == '2'; }
+    if (all && t == GL_TEXTURE_2D) {
+        GLint name = 0; real_get_integerv(GL_TEXTURE_BINDING_2D, &name);
+        const unsigned char *p = d;
+        fprintf(stderr, "[es-up] tex %d niveau %d interne %#x -> %#x %dx%d format %#x type %#x err %#x data %p %u,%u,%u,%u\n", name, l, i,
+                es3_internal(i, f, ty), w, h, f, es3_type(ty), glGetError(), d, p ? p[0] : 0, p ? p[1] : 0, p ? p[2] : 0, p ? p[3] : 0);
+    }
 }
 static void es3_tex_sub_image_2d(GLenum t, GLint l, GLint x, GLint y, GLsizei w, GLsizei h, GLenum f, GLenum ty, const void *d) {
     es_tex_sub_image_2d(t, l, x, y, w, h, f, es3_type(ty), d);
+    { const char *e = getenv("P2_IOS_GL_TRACE"); if (e && *e == '2' && t == GL_TEXTURE_2D) {
+        GLint name = 0; real_get_integerv(GL_TEXTURE_BINDING_2D, &name);
+        fprintf(stderr, "[es-sub] tex %d niveau %d %dx%d+%d+%d data %p\n", name, l, w, h, x, y, d); } }
 }
 // Écriture sans synchronisation (runtime/gl.c, stream_subdata) : le pilote ES
 // d'Apple attend que le GPU ait fini avec le tampon avant un glBufferSubData
@@ -381,6 +429,7 @@ static void tex_parameter_3d_i(GLenum target, GLenum name, GLint value);
 // les transmettre ; en ES 3 ils existent. Sans eux, une chaîne de mipmaps
 // partielle (MAX_LEVEL réglé par togl) rend la texture incomplète : noire.
 static int level_parameter(GLenum name) { return name >= 0x813A && name <= 0x813D; }
+static int trace_enabled(void);
 static void es_level_parameter(GLenum target, GLenum name, GLfloat value) {
     if (target != GL_TEXTURE_2D && target != GL_TEXTURE_CUBE_MAP) return;
     GLint unit = GL_TEXTURE0, name_bound = 0, real_unit = GL_TEXTURE0, real_bound = 0;
@@ -393,6 +442,15 @@ static void es_level_parameter(GLenum target, GLenum name, GLfloat value) {
     if (real_bound != name_bound) glBindTexture(target, (GLuint)name_bound);
     if (name == 0x813C || name == 0x813D) glTexParameteri(target, name, (GLint)value);
     else glTexParameterf(target, name, value);
+    if (trace_enabled()) {   // une ligne par combinaison (paramètre, valeur)
+        static struct { GLenum name; GLfloat value; } seen[64]; static int count;
+        int known = 0;
+        for (int i = 0; i < count; ++i) known |= seen[i].name == name && seen[i].value == value;
+        if (!known && count < 64) {
+            seen[count].name = name; seen[count++].value = value;
+            fprintf(stderr, "[gl-trace] niveau %#x = %g (texture %d, cible %#x)\n", name, value, name_bound, target);
+        }
+    }
     if (real_bound != name_bound) glBindTexture(target, (GLuint)real_bound);
     if (real_unit != unit) glActiveTexture((GLenum)real_unit);
 }
@@ -426,7 +484,7 @@ static void tex_parameteriv(GLenum target, GLenum name, const GLint *values) {
 // (fonction, cible, niveau, formats) est journalisée une fois, avec l'erreur GL.
 static int trace_enabled(void) {
     static int enabled = -1;
-    if (enabled < 0) { const char *e = getenv("P2_IOS_GL_TRACE"); enabled = e && *e == '1'; }
+    if (enabled < 0) { const char *e = getenv("P2_IOS_GL_TRACE"); enabled = e && (*e == '1' || *e == '2'); }
     return enabled;
 }
 static void trace_upload(const char *fn, GLenum target, GLint level, GLenum internal, GLsizei w, GLsizei h,
@@ -435,6 +493,15 @@ static void trace_upload(const char *fn, GLenum target, GLint level, GLenum inte
     static int count;
     GLenum (*error)(void) = gl4es_GetProcAddress("glGetError");
     GLenum e = error();
+    static int all = -1;   // P2_IOS_GL_TRACE=2 : chaque envoi, avec la texture liée
+    if (all < 0) { const char *t = getenv("P2_IOS_GL_TRACE"); all = t && *t == '2'; }
+    if (all) {
+        GLint name = 0;
+        gl4es_get_integerv(target == GL_TEXTURE_2D ? GL_TEXTURE_BINDING_2D : GL_TEXTURE_BINDING_CUBE_MAP, &name);
+        fprintf(stderr, "[gl-up] tex %d %s niveau %d interne %#x %dx%d type %#x data %d err %#x\n", name, fn, level,
+                internal, w, h, type, data != NULL, e);
+        return;
+    }
     for (int i = 0; i < count; ++i)
         if (seen[i].fn == fn && seen[i].target == target && seen[i].internal == internal && seen[i].format == format &&
             seen[i].type == type && seen[i].level == (level > 0) && seen[i].data == (data != NULL) && !e) return;

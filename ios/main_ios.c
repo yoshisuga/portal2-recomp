@@ -6,7 +6,7 @@
 // fichier launch.args du paquet (un argument par ligne, # pour commenter),
 // complété par Documents/launch.args s'il existe.
 // --user-dir, --images, --game-dir et --linux-root manquants : dossiers
-// portal2-userdata, prep, game et linux de Documents (s'ils existent).
+// <jeu>-userdata, prep, game et linux de Documents (s'ils existent).
 #include <SDL_main.h>
 #include <limits.h>
 #include <mach-o/dyld.h>
@@ -19,6 +19,16 @@
 #include "settings.h"
 
 int p2_main(int argc, char **argv);
+
+// Jeu et app Steam : définis par tools/build_ios.py depuis config/local.json.
+#ifndef RT_GAME_DIR
+#define RT_GAME_DIR "portal2"
+#endif
+#ifndef RT_STEAM_APP_ID
+#define RT_STEAM_APP_ID 620
+#endif
+#define STRING_(x) #x
+#define STRING(x) STRING_(x)
 
 static char *arguments[256];
 static int count;
@@ -69,9 +79,9 @@ int main(int argc, char **argv) {
     if (slash) *slash = 0;
     // Stub Steam du build iOS (runtime/ios/steam_stub.c) : lié dans l'exécutable.
     setenv("P2_STEAM_API_DYLIB", exe, 0);
-    setenv("SteamAppId", "620", 0);
-    setenv("SteamGameId", "620", 0);
-    push(argc > 0 ? argv[0] : "portal2");
+    setenv("SteamAppId", STRING(RT_STEAM_APP_ID), 0);
+    setenv("SteamGameId", STRING(RT_STEAM_APP_ID), 0);
+    push(argc > 0 ? argv[0] : RT_GAME_DIR);
     if (argc > 1) for (int i = 1; i < argc; ++i) push(argv[i]);
     else {
         read_launch_file(bundle);
@@ -91,7 +101,7 @@ int main(int argc, char **argv) {
         snprintf(documents, sizeof(documents), "%s/Documents", getenv("HOME"));
         mkdir(documents, 0755);
         static const struct { const char *option, *folder; int create; } defaults[] = {
-            {"--user-dir", "portal2-userdata", 1}, {"--images", "prep", 0},
+            {"--user-dir", RT_GAME_DIR "-userdata", 1}, {"--images", "prep", 0},
             {"--game-dir", "game", 0}, {"--linux-root", "linux", 0}};
         for (size_t d = 0; d < sizeof(defaults) / sizeof(*defaults) && count + 2 < 256; ++d) {
             int present = 0;

@@ -1,5 +1,5 @@
 diff --git a/src/gl/directstate.c b/src/gl/directstate.c
-index a2c7edb..05d1309 100644
+index a2c7edb3..05d13096 100644
 --- a/src/gl/directstate.c
 +++ b/src/gl/directstate.c
 @@ -366,7 +366,11 @@ void APIENTRY_GL4ES gl4es_glEnableClientStateIndexed(GLenum array, GLuint index)
@@ -27,10 +27,30 @@ index a2c7edb..05d1309 100644
  void APIENTRY_GL4ES gl4es_glEnableVertexArray(GLuint vaobj, GLenum array) {
      DBG(printf("glEnableVertexArray(%d, %s)\n", vaobj, PrintEnum(array));)
 diff --git a/src/gl/drawing.c b/src/gl/drawing.c
-index 498ecc5..8652abf 100644
+index 498ecc5a..d670c95c 100644
 --- a/src/gl/drawing.c
 +++ b/src/gl/drawing.c
-@@ -1064,7 +1064,7 @@ void APIENTRY_GL4ES gl4es_glMultiDrawElementsBaseVertex( GLenum mode, GLsizei *c
+@@ -454,6 +454,7 @@ if(count>500000) return;
+ #define MIN_BATCH  globals4es.minbatch
+ #define MAX_BATCH  globals4es.maxbatch
+ 
++int gl4es_range_valid; GLuint gl4es_range_start, gl4es_range_end;
+ void APIENTRY_GL4ES gl4es_glDrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void *indices) {
+     DBG(printf("glDrawRangeElements(%s, %i, %i, %i, %s, @%p), inlist=%i, pending=%d\n", PrintEnum(mode), start, end, count, PrintEnum(type), indices, (glstate->list.active)?1:0, glstate->list.pending);)
+     count = adjust_vertices(mode, count);
+@@ -549,7 +550,11 @@ void APIENTRY_GL4ES gl4es_glDrawRangeElements(GLenum mode, GLuint start, GLuint
+         
+         return;
+     } else {
++        // iOS : plage transmise au pilote (glDrawRangeElements), qui sinon
++        // parcourt tous les indices sur le CPU à chaque tracé.
++        if(!need_free) { gl4es_range_valid = 1; gl4es_range_start = start; gl4es_range_end = end; }
+         glDrawElementsCommon(mode, 0, count, end+1, sindices, iindices, 1);
++        gl4es_range_valid = 0;
+         if(need_free)
+             free(sindices);
+     }
+@@ -1064,7 +1069,7 @@ void APIENTRY_GL4ES gl4es_glMultiDrawElementsBaseVertex( GLenum mode, GLsizei *c
          GLushort *sindices = NULL;
          GLuint *iindices = NULL;
  
@@ -39,7 +59,7 @@ index 498ecc5..8652abf 100644
              iindices = copy_gl_array((glstate->vao->elements)?(void*)((char*)glstate->vao->elements->data + (uintptr_t)indices):indices,
                  type, 1, 0, GL_UNSIGNED_INT, 1, 0, count, NULL);
          else
-@@ -1108,10 +1108,11 @@ void APIENTRY_GL4ES gl4es_glMultiDrawElementsBaseVertex( GLenum mode, GLsizei *c
+@@ -1108,10 +1113,11 @@ void APIENTRY_GL4ES gl4es_glMultiDrawElementsBaseVertex( GLenum mode, GLsizei *c
              list->indice_cap = count;
              continue;
          } else {
@@ -53,7 +73,82 @@ index 498ecc5..8652abf 100644
              GLuint old_index = wantBufferIndex(0);
              glDrawElementsCommon(mode, 0, count, 0, sindices, iindices, 1);
              if(iindices)
-@@ -1165,7 +1166,7 @@ void APIENTRY_GL4ES gl4es_glDrawElementsBaseVertex(GLenum mode, GLsizei count, G
+@@ -1130,11 +1136,73 @@ void APIENTRY_GL4ES gl4es_glMultiDrawElementsBaseVertex( GLenum mode, GLsizei *c
+ AliasExport(void,glMultiDrawElementsBaseVertex,,( GLenum mode, GLsizei *count, GLenum type, const void * const *indices, GLsizei primcount, const GLint * basevertex));
+ AliasExport(void,glMultiDrawElementsBaseVertex,ARB,( GLenum mode, GLsizei *count, GLenum type, const void * const *indices, GLsizei primcount, const GLint * basevertex));
+ 
++// iOS (Half-Life 2) : OpenGL ES 3.0 n'a pas de « base vertex ». Plutôt que de
++// recopier les indices sur le CPU (indices en mémoire client : le pilote les
++// parcourt et les recopie à chaque tracé, l'essentiel du temps du thread
++// principal), on décale l'origine de chaque attribut de basevertex sommets et
++// on trace avec les indices d'origine, restés dans leur tampon GPU. Seulement
++// si les indices et tous les attributs actifs sont dans de vrais tampons.
++static int basevertex_refused(GLint basevertex) {
++    if(!glstate->vao->elements) return 1;
++    if(!glstate->vao->elements->real_buffer) return 2;
++    if(glstate->list.active || glstate->list.pending) return 3;
++    if(glstate->polygon_mode == GL_LINE || glstate->polygon_mode == GL_POINT) return 4;
++    for(int i=0; i<hardext.maxvattrib; i++) {
++        vertexattrib_t *w = &glstate->vao->vertexattrib[i];
++        if(!w->enabled || w->divisor) continue;
++        if(!w->real_buffer) return 5;
++        if((intptr_t)w->real_pointer + (intptr_t)basevertex * w->stride < 0) return 6;
++    }
++    return 0;
++}
++static int basevertex_shift(GLint basevertex, int sign) {
++    if(sign > 0) {
++        static unsigned counts[7], total;
++        static int trace = -1;
++        if(trace < 0) trace = getenv("P2_IOS_BASEVERTEX_TRACE") != NULL;
++        int why = basevertex_refused(basevertex);
++        ++counts[why];
++        if(trace && ++total % 5000 == 0)
++            fprintf(stderr, "[basevertex] décalés %u, refus : sans indices %u, indices en RAM %u, liste %u, polygone %u, attribut en RAM %u, négatif %u\n",
++                    counts[0], counts[1], counts[2], counts[3], counts[4], counts[5], counts[6]);
++        if(trace) {   // formats d'attributs distincts
++            static struct { int i, size, normalized, stride, align; GLenum type; } seen[96]; static int nseen;
++            for(int i=0; i<hardext.maxvattrib; i++) {
++                vertexattrib_t *w = &glstate->vao->vertexattrib[i];
++                if(!w->enabled || w->divisor) continue;
++                int align = (int)(((intptr_t)w->real_pointer + (intptr_t)basevertex * w->stride) & 3);
++                int known = 0;
++                for(int k=0; k<nseen && !known; k++)
++                    known = seen[k].i==i && seen[k].size==w->size && seen[k].type==w->type && seen[k].normalized==w->normalized
++                            && seen[k].stride==w->stride && seen[k].align==align;
++                if(!known && nseen < 96) {
++                    seen[nseen].i=i; seen[nseen].size=w->size; seen[nseen].type=w->type; seen[nseen].normalized=w->normalized;
++                    seen[nseen].stride=w->stride; seen[nseen++].align=align;
++                    fprintf(stderr, "[attrib] %d : taille %d type %#x normalisé %d pas %d décalage%%4 %d\n", i, w->size, w->type,
++                            w->normalized, w->stride, align);
++                }
++            }
++        }
++        if(why) return 0;
++    }
++    for(int i=0; i<hardext.maxvattrib; i++) {
++        vertexattrib_t *w = &glstate->vao->vertexattrib[i];
++        if(!w->enabled || w->divisor) continue;
++        intptr_t delta = (intptr_t)sign * basevertex * w->stride;
++        w->real_pointer = (const char*)w->real_pointer + delta;
++        w->pointer = (const char*)w->pointer + delta;
++    }
++    return 1;
++}
++
+ void APIENTRY_GL4ES gl4es_glDrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const void *indices, GLint basevertex) {
+     DBG(printf("glDrawElementsBaseVertex(%s, %d, %s, %p, %d), vtx=%p map=%p, pending=%d\n", PrintEnum(mode), count, PrintEnum(type), indices, basevertex, (glstate->vao->vertex)?glstate->vao->vertex->data:NULL, (glstate->vao->elements)?glstate->vao->elements->data:NULL, glstate->list.pending);)
+     if(basevertex==0)
+         gl4es_glDrawElements(mode, count, type, indices);
+-    else {
++    else if(basevertex_shift(basevertex, 1)) {
++        gl4es_glDrawElements(mode, count, type, indices);
++        basevertex_shift(basevertex, -1);
++    } else {
+         count = adjust_vertices(mode, count);
+        
+         if (count<0) {
+@@ -1165,7 +1233,7 @@ void APIENTRY_GL4ES gl4es_glDrawElementsBaseVertex(GLenum mode, GLsizei count, G
          GLushort *sindices = NULL;
          GLuint *iindices = NULL;
  
@@ -62,7 +157,17 @@ index 498ecc5..8652abf 100644
              iindices = copy_gl_array((glstate->vao->elements)?(void*)((char*)glstate->vao->elements->data + (uintptr_t)indices):indices,
                  type, 1, 0, GL_UNSIGNED_INT, 1, 0, count, NULL);
          else
-@@ -1260,7 +1261,7 @@ void APIENTRY_GL4ES gl4es_glDrawRangeElementsBaseVertex(GLenum mode, GLuint star
+@@ -1230,6 +1298,9 @@ void APIENTRY_GL4ES gl4es_glDrawRangeElementsBaseVertex(GLenum mode, GLuint star
+     DBG(printf("glDrawRangeElementsBaseVertex(%s, %i, %i, %i, %s, @%p, %d), inlist=%i, pending=%d\n", PrintEnum(mode), start, end, count, PrintEnum(type), indices, basevertex, (glstate->list.active)?1:0, glstate->list.pending);)
+     if(basevertex==0) {
+         gl4es_glDrawRangeElements(mode, start, end, count, type, indices);
++    } else if(basevertex_shift(basevertex, 1)) {
++        gl4es_glDrawRangeElements(mode, start, end, count, type, indices);
++        basevertex_shift(basevertex, -1);
+     } else {
+         count = adjust_vertices(mode, count);
+         
+@@ -1260,7 +1331,7 @@ void APIENTRY_GL4ES gl4es_glDrawRangeElementsBaseVertex(GLenum mode, GLuint star
          noerrorShim();
          GLushort *sindices = NULL;
          GLuint *iindices = NULL;
@@ -72,7 +177,7 @@ index 498ecc5..8652abf 100644
                  type, 1, 0, GL_UNSIGNED_INT, 1, 0, count, NULL);
          else
 diff --git a/src/gl/fpe.c b/src/gl/fpe.c
-index c21bcf1..bb46381 100644
+index c21bcf1f..3f0dcafa 100644
 --- a/src/gl/fpe.c
 +++ b/src/gl/fpe.c
 @@ -462,6 +462,7 @@ program_t* APIENTRY_GL4ES fpe_CustomShader(program_t* glprogram, fpe_state_t* st
@@ -145,7 +250,23 @@ index c21bcf1..bb46381 100644
          }
          // now find the program
          khint_t k_program;
-@@ -1051,6 +1053,13 @@ int fpe_gettexture(int TMU) {
+@@ -836,7 +838,14 @@ void APIENTRY_GL4ES fpe_glDrawElements(GLenum mode, GLsizei count, GLenum type,
+         DBG(printf("Using VBO %d for indices\n", glstate->vao->elements->real_buffer);)
+     }
+     realize_bufferIndex();
+-    gles_glDrawElements(mode, count, type, indices);
++    extern int gl4es_range_valid; extern GLuint gl4es_range_start, gl4es_range_end;
++    static void (*draw_range)(GLenum, GLuint, GLuint, GLsizei, GLenum, const GLvoid *);
++    static int draw_range_loaded;
++    if(!draw_range_loaded) { draw_range_loaded = 1; draw_range = proc_address(gles, "glDrawRangeElements"); }
++    if(gl4es_range_valid && draw_range)
++        draw_range(mode, gl4es_range_start, gl4es_range_end, count, type, indices);
++    else
++        gles_glDrawElements(mode, count, type, indices);
+     if(use_vbo)
+         wantBufferIndex(0);
+     free_scratch(&scratch);
+@@ -1051,6 +1060,19 @@ int fpe_gettexture(int TMU) {
      return target;
  }
  
@@ -156,10 +277,16 @@ index c21bcf1..bb46381 100644
 +// « mode immédiat » du pilote (recopie de tous les sommets).
 +extern int gl4es_p2_bgra_program(GLuint program) __attribute__((weak));
 +extern void gl4es_p2_bgra_mask(GLuint program, unsigned mask) __attribute__((weak));
++// P2_IOS_NO_CONST_STREAM=1 : flux qui se chevauchent laissés au pilote (diagnostic).
++static int p2_const_streams(void) {
++    static int on = -1;
++    if(on < 0) on = getenv("P2_IOS_NO_CONST_STREAM") == NULL;
++    return on;
++}
  void realize_glenv(int ispoint, int first, int count, GLenum type, const void* indices, scratch_t* scratch) {
      // the handling of GL_BGRA size of GL_DOUBLE using 1 scratch in not ideal, and a waste when dealing with Buffers
      // TODO: have the scratch buffer part of the VBO, and tag it dirty when buffer is changed (or always dirty for VBO 0)
-@@ -1105,15 +1114,27 @@ void realize_glenv(int ispoint, int first, int count, GLenum type, const void* i
+@@ -1105,15 +1127,27 @@ void realize_glenv(int ispoint, int first, int count, GLenum type, const void* i
                  glprogram->fpe_cache = fpe_NewCache();
              glprogram = fpe_CustomShader_DefaultVertex(glprogram, &vertex_state);    // fetch from cache if exist or create it
              program = glprogram->id;
@@ -196,7 +323,7 @@ index c21bcf1..bb46381 100644
          }
          if(glstate->gleshard->program != program)
          {
-@@ -1440,6 +1461,18 @@ void realize_glenv(int ispoint, int first, int count, GLenum type, const void* i
+@@ -1440,6 +1474,18 @@ void realize_glenv(int ispoint, int first, int count, GLenum type, const void* i
          #undef GO
      }
      // set VertexAttrib if needed
@@ -215,7 +342,21 @@ index c21bcf1..bb46381 100644
      for(int i=0; i<hardext.maxvattrib; i++) 
      if(glprogram->va_size[i])   // only check used VA...
      {
-@@ -1461,6 +1494,8 @@ void realize_glenv(int ispoint, int first, int count, GLenum type, const void* i
+@@ -1447,6 +1493,13 @@ void realize_glenv(int ispoint, int first, int count, GLenum type, const void* i
+         vertexattrib_t *w = &glstate->vao->vertexattrib[i];
+         int enabled = w->enabled;
+         int dirty = 0;
++        // iOS : flux qui se chevauche (pas plus petit que l'élément, ainsi togl
++        // donne une valeur constante à une entrée absente) : le pilote ES de
++        // Metal le recopie sur le CPU sommet par sommet à chaque tracé. Envoyé
++        // comme valeur constante (premier élément) à la place.
++        int p2_const = enabled && !w->divisor && w->buffer && w->buffer->data && w->size>=1 && w->size<=4
++                       && w->stride>0 && w->stride < w->size*gl_sizeof(w->type) && p2_const_streams();
++        if(p2_const) enabled = 0;
+         if(enabled && !w->buffer && !w->pointer) {
+             DBG(printf("Warning: VA %d Enabled with buffer:0 and NULL pointer, disabling\n", i));
+             enabled = 0;
+@@ -1461,6 +1514,8 @@ void realize_glenv(int ispoint, int first, int count, GLenum type, const void* i
              else
                  gles_glDisableVertexAttribArray(i);
          }
@@ -224,7 +365,7 @@ index c21bcf1..bb46381 100644
          // check if new value has to be sent to hardware
          if(v->enabled) {
              // array case
-@@ -1469,7 +1504,17 @@ void realize_glenv(int ispoint, int first, int count, GLenum type, const void* i
+@@ -1469,7 +1524,17 @@ void realize_glenv(int ispoint, int first, int count, GLenum type, const void* i
                  || v->stride!=w->stride || v->buffer!=w->buffer || (w->real_buffer==0 && v->pointer!=ptr)
                  || v->real_buffer!=w->real_buffer || (w->real_buffer!=0 && v->real_pointer != w->real_pointer) 
                  || w->real_buffer!=glstate->bind_buffer.array) {
@@ -243,7 +384,21 @@ index c21bcf1..bb46381 100644
                      // need to adjust, so first need the min/max (a shame as I already must have that somewhere)
                      int imin, imax;
                      if(type==0) {
-@@ -1571,6 +1616,7 @@ void realize_glenv(int ispoint, int first, int count, GLenum type, const void* i
+@@ -1529,11 +1594,11 @@ void realize_glenv(int ispoint, int first, int count, GLenum type, const void* i
+             // single value case
+             char* current = (char*)glstate->vavalue[i];
+             GLfloat tmp[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+-            if(w->divisor && w->enabled) {
++            if((w->divisor || p2_const) && w->enabled) {
+                 current = (char*)((uintptr_t)w->pointer + ((w->buffer)?(uintptr_t)w->buffer->data:0));
+                 int stride=w->stride;
+                 if(!stride) stride=gl_sizeof(w->type)*w->size;
+-                current += (glstate->instanceID/w->divisor) * stride;
++                if(w->divisor) current += (glstate->instanceID/w->divisor) * stride;
+                 if(w->type==GL_FLOAT) {
+                     if(w->size!=4) {
+                         memcpy(tmp, current, sizeof(GLfloat)*w->size);
+@@ -1571,6 +1636,7 @@ void realize_glenv(int ispoint, int first, int count, GLenum type, const void* i
              gles_glDisableVertexAttribArray(i);
          }
      }
@@ -252,7 +407,7 @@ index c21bcf1..bb46381 100644
  
  void realize_blitenv(int alpha) {
 diff --git a/src/gl/fpe.h b/src/gl/fpe.h
-index 4c51179..9bdaf3c 100644
+index 4c51179f..9bdaf3c4 100644
 --- a/src/gl/fpe.h
 +++ b/src/gl/fpe.h
 @@ -227,6 +227,7 @@ typedef struct fpe_fpe_s {
@@ -264,7 +419,7 @@ index 4c51179..9bdaf3c 100644
  
  #ifndef kh_fpecachelist_t
 diff --git a/src/gl/framebuffers.c b/src/gl/framebuffers.c
-index b0f0299..3929400 100644
+index b0f02993..39294008 100644
 --- a/src/gl/framebuffers.c
 +++ b/src/gl/framebuffers.c
 @@ -153,14 +153,15 @@ void APIENTRY_GL4ES gl4es_glDeleteFramebuffers(GLsizei n, GLuint *framebuffers)
@@ -287,7 +442,7 @@ index b0f0299..3929400 100644
                          free(fb);
                          kh_del(framebufferlist_t, glstate->fbo.framebufferlist, k);                        
 diff --git a/src/gl/pixel.c b/src/gl/pixel.c
-index 34f00db..ba56cdd 100644
+index 34f00db6..ba56cddc 100644
 --- a/src/gl/pixel.c
 +++ b/src/gl/pixel.c
 @@ -494,6 +494,7 @@ bool half_pixel(const GLvoid *src0, const GLvoid *src1,
@@ -307,7 +462,7 @@ index 34f00db..ba56cdd 100644
          type_case(GL_UNSIGNED_SHORT, GLushort, write_each(, / 65535.0f,))
          type_case(GL_INT8_REV, GLubyte, write_each(, * 255.0,))
 diff --git a/src/gl/program.h b/src/gl/program.h
-index a788da4..e0dcd0c 100644
+index a788da4b..e0dcd0c1 100644
 --- a/src/gl/program.h
 +++ b/src/gl/program.h
 @@ -214,6 +214,8 @@ typedef struct {
@@ -320,7 +475,7 @@ index a788da4..e0dcd0c 100644
      int             default_fragment;
      shaderconv_need_t *default_need;    // filled only if default_vertex or default_fragment is used
 diff --git a/src/gl/raster.c b/src/gl/raster.c
-index b006721..13eb2ca 100644
+index b0067219..13eb2cac 100644
 --- a/src/gl/raster.c
 +++ b/src/gl/raster.c
 @@ -1,3 +1,4 @@
@@ -355,10 +510,22 @@ index b006721..13eb2ca 100644
  			height *= tex->fbtex_ratio;
  			x *= tex->fbtex_ratio;
 diff --git a/src/gl/texture_compressed.c b/src/gl/texture_compressed.c
-index 25d2d74..5d9e309 100644
+index 25d2d742..46b8d3dc 100644
 --- a/src/gl/texture_compressed.c
 +++ b/src/gl/texture_compressed.c
-@@ -248,8 +248,8 @@ void APIENTRY_GL4ES gl4es_glCompressedTexImage2D(GLenum target, GLint level, GLe
+@@ -206,8 +206,9 @@ void APIENTRY_GL4ES gl4es_glCompressedTexImage2D(GLenum target, GLint level, GLe
+     GLenum type = GL_UNSIGNED_BYTE;
+         
+     if (isDXTc(internalformat)) {
+-        if(level && bound->mipmap_auto==1)
+-            return; // nothing to do
++        // iOS (Half-Life 2) : un niveau envoyé explicitement remplace toujours
++        // celui généré. Sinon, une texture d'abord envoyée en noir (chargement
++        // asynchrone) garde des mipmaps noires après l'arrivée des vraies données.
+         GLvoid *pixels, *half;
+         pixels = half = NULL;
+         bound->alpha = (internalformat==GL_COMPRESSED_RGB_S3TC_DXT1_EXT || internalformat==GL_COMPRESSED_SRGB_S3TC_DXT1_EXT)?0:1;
+@@ -248,8 +249,8 @@ void APIENTRY_GL4ES gl4es_glCompressedTexImage2D(GLenum target, GLint level, GLe
              } else {
                  pixels = uncompressDXTc(width, height, internalformat, imageSize, transparent0, &simpleAlpha, &complexAlpha, datab);
              }
@@ -369,7 +536,7 @@ index 25d2d74..5d9e309 100644
              // automaticaly reduce the pixel size
              half=pixels;
              if(!globals4es.nodownsampling && !globals4es.avoid16bits) {
-@@ -387,8 +387,7 @@ void APIENTRY_GL4ES gl4es_glCompressedTexSubImage2D(GLenum target, GLint level,
+@@ -387,8 +388,7 @@ void APIENTRY_GL4ES gl4es_glCompressedTexSubImage2D(GLenum target, GLint level,
          } else {
              pixels = uncompressDXTc(width, height, format, imageSize, transparent0, &simpleAlpha, &complexAlpha, datab);
          }
@@ -380,7 +547,7 @@ index 25d2d74..5d9e309 100644
          #if 0
          pixel_thirdscale(pixels, &half, width, height, GL_RGBA, GL_UNSIGNED_BYTE);
 diff --git a/src/gl/texture_params.c b/src/gl/texture_params.c
-index 96e0720..7eade69 100644
+index 96e07205..7eade696 100644
 --- a/src/gl/texture_params.c
 +++ b/src/gl/texture_params.c
 @@ -861,7 +861,7 @@ void realize_textures(int drawing) {

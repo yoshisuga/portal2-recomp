@@ -68,6 +68,9 @@ def generation_key(layout_path, layout, specs, whole_game):
 
 
 def generate(args, layout, specs):
+    # Jeu complet (macOS et iOS) : une instruction non traduite piège à son
+    # adresse (lift.TRAP_UNSUPPORTED) ; les processus de traduction (fork) en héritent.
+    lift.TRAP_UNSUPPORTED = True
     out = Path('build/game/gen')
     manifest_path = out / 'manifest.json'
     key = generation_key(args.layout, layout, specs, args.all)
@@ -224,10 +227,6 @@ def disk_usage(path):
 
 
 def main():
-    # Instructions non traduites : piège à leur adresse (lift.TRAP_UNSUPPORTED),
-    # aussi dans les processus de traduction, qui relisent l'environnement.
-    os.environ['LIFT_TRAP_UNSUPPORTED'] = '1'
-    lift.TRAP_UNSUPPORTED = True
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--layout', type=Path, default=Path('build/game/prep/layout.json'))
     parser.add_argument('--out', type=Path, default=Path('build/portal2-native'))

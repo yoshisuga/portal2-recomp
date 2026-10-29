@@ -57,9 +57,10 @@ int rt_ios_move_response(void);
 void rt_ios_console_command(const char *name);   // game_state.c
 
 typedef enum { ROLE_MOVE, ROLE_LOOK, ROLE_BUTTON } Role;
-typedef enum { KEY_SPACE, KEY_CTRL, KEY_E, KEY_ESCAPE, MOUSE_LEFT, MOUSE_RIGHT, LOOK_MODE, GYRO_MODE, ACTION_COUNT } Action;
+typedef enum { KEY_SPACE, KEY_CTRL, KEY_E, KEY_ESCAPE, MOUSE_LEFT, MOUSE_RIGHT, LOOK_MODE, GYRO_MODE,
+               KEY_R, KEY_F, KEY_Q, KEY_SHIFT, WHEEL_NEXT, ACTION_COUNT } Action;
 typedef struct { Action action; NSString *symbol; UIColor *color; CGPoint at; CGFloat size; } Button;
-enum { MAX_BUTTONS = 12 };
+enum { MAX_BUTTONS = 16 };
 
 // Manette virtuelle : deux axes seulement (stick gauche), aucun bouton, pour
 // qu'elle ne porte aucune autre commande que le déplacement.
@@ -376,6 +377,11 @@ static void backtap_touch(NSSet<UITouch *> *touches) {
 
 - (instancetype)initWithWindow:(SDL_Window *)sdlWindow {
     if ((self = [super initWithFrame:CGRectZero])) {
+#if RT_GAME_HL2
+        // Arme suivante d'un seul appui : sélection immédiate, sans le menu
+        // d'armes qui attend un clic de confirmation.
+        rt_ios_console_command("hud_fastswitch 1");
+#endif
         window = sdlWindow;
         self.multipleTouchEnabled = YES; self.backgroundColor = UIColor.clearColor; self.opaque = NO;
         self.contentMode = UIViewContentModeRedraw;
@@ -536,6 +542,18 @@ static void backtap_touch(NSSet<UITouch *> *touches) {
     case KEY_CTRL: [self key:SDL_SCANCODE_LCTRL down:down]; break;
     case KEY_E: [self key:SDL_SCANCODE_E down:down]; break;
     case KEY_ESCAPE: [self key:SDL_SCANCODE_ESCAPE down:down]; break;
+    case KEY_R: [self key:SDL_SCANCODE_R down:down]; break;          // recharger
+    case KEY_F: [self key:SDL_SCANCODE_F down:down]; break;          // lampe torche
+    case KEY_Q: [self key:SDL_SCANCODE_Q down:down]; break;          // arme précédente (lastinv)
+    case KEY_SHIFT: [self key:SDL_SCANCODE_LSHIFT down:down]; break; // sprint
+    case WHEEL_NEXT:                                                 // arme suivante (invnext)
+        if (down) {
+            SDL_Event e = {0};
+            e.type = SDL_MOUSEWHEEL; e.wheel.windowID = SDL_GetWindowID(window); e.wheel.y = -1;
+            e.wheel.direction = SDL_MOUSEWHEEL_NORMAL;
+            SDL_PushEvent(&e);
+        }
+        break;
     case MOUSE_LEFT: [self mouseButton:SDL_BUTTON_LEFT down:down at:centre]; break;
     case MOUSE_RIGHT: [self mouseButton:SDL_BUTTON_RIGHT down:down at:centre]; break;
     case LOOK_MODE: if (down) [self toggleLookMode]; break;
@@ -571,6 +589,30 @@ static BOOL portal_buttons(void) {
     CGFloat use = y + h * .80, gap = kPortalSize * 1.15;
     CGFloat fire = MIN(use + (kButtonSize + kPortalSize) / 2 + 6, y + h - kPortalSize * .55);
     CGFloat toggles = CGRectGetMaxY([self fpsCorner]) + kButtonSize * .45 + 4;
+#if RT_GAME_HL2
+    // Half-Life 2 : tir principal (grand, rouge) sous « utiliser », tir secondaire
+    // à sa gauche ; rechargement, arme suivante et précédente au-dessus du pouce
+    // droit ; sprint au-dessus du stick ; lampe torche à gauche de la pause.
+    (void)blue; (void)orange;
+    UIColor *red = [UIColor colorWithRed:.85 green:.18 blue:.12 alpha:.6];
+    Button all[] = {
+        {MOUSE_LEFT, @"scope", red, {x + w * .94, fire}, kPortalSize},
+        {MOUSE_RIGHT, @"circle.circle", ink, {x + w * .94 - gap, fire}, kButtonSize},
+        {KEY_SPACE, @"arrow.up", ink, {x + w * .94, y + h * .50}, kButtonSize},
+        {KEY_CTRL, @"arrow.down", ink, {x + w * .80, y + h * .40}, kButtonSize},
+        {KEY_E, @"hand.point.up.left.fill", ink, {x + w * .94, use}, kButtonSize},
+        {KEY_R, @"arrow.clockwise", ink, {x + w * .80, y + h * .62}, kButtonSize * .85},
+        {WHEEL_NEXT, @"chevron.forward.2", ink, {x + w * .94, y + h * .30}, kButtonSize * .85},
+        {KEY_Q, @"arrow.uturn.backward", ink, {x + w * .80, y + h * .20}, kButtonSize * .75},
+        {KEY_SHIFT, @"figure.run", ink, {x + w * .06, y + h * .40}, kButtonSize * .85},
+        {KEY_F, @"flashlight.on.fill", ink, {x + w - kButtonSize * 1.35, y + kButtonSize * .45}, kButtonSize * .75},
+        {KEY_ESCAPE, @"pause.fill", ink, {x + w - kButtonSize * .45, y + kButtonSize * .45}, kButtonSize * .75},
+        {LOOK_MODE, trackpad ? @"hand.draw.fill" : @"r.joystick.fill", ink,
+         {x + kButtonSize * .45, toggles}, kButtonSize * .75},
+        {GYRO_MODE, @"gyroscope", gyroOn ? ink : [UIColor colorWithWhite:0 alpha:.12],
+         {x + kButtonSize * 1.3, toggles}, kButtonSize * .75},
+    };
+#else
     Button all[] = {
         {MOUSE_LEFT, nil, blue, {x + w * .94 - gap, fire}, kPortalSize}, {MOUSE_RIGHT, nil, orange, {x + w * .94, fire}, kPortalSize},
         {KEY_SPACE, @"arrow.up", ink, {x + w * .94, y + h * .50}, kButtonSize},
@@ -585,6 +627,7 @@ static BOOL portal_buttons(void) {
         {GYRO_MODE, @"gyroscope", gyroOn ? ink : [UIColor colorWithWhite:0 alpha:.12],
          {x + kButtonSize * 1.3, toggles}, kButtonSize * .75},
     };
+#endif
     int n = 0;
     for (int i = 0; i < (int)(sizeof(all) / sizeof(*all)) && n < MAX_BUTTONS; ++i) {
         // Les tapes au dos tirent les portails : leurs boutons ne servent que sans

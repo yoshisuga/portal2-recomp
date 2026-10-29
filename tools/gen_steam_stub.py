@@ -4,17 +4,20 @@ fonction plate de libsteam_api que le pont (runtime/steam_generated.c) peut
 appeler, pour le stub Steam du build iOS (runtime/ios/steam_stub.c).
 
 Par défaut une fonction renvoie 0, false, NULL ou "" ; RESPONSES donne les
-réponses d'un utilisateur connecté, hors ligne, qui possède Portal 2 (620).
+réponses d'un utilisateur connecté, hors ligne, qui possède le jeu de
+config/local.json (steam_appid : 620 pour Portal 2, 220 pour Half-Life 2).
 Une fonction qui renvoie un pointeur à partir d'une version d'interface
 renvoie l'objet d'interface du stub. Les fonctions déjà écrites à la main
 dans steam_stub.c sont sautées.
 """
+import json
 import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-APP_ID = 620
+_CONFIG = ROOT / 'config/local.json'
+APP_ID = int(json.loads(_CONFIG.read_text()).get('steam_appid', 620)) if _CONFIG.exists() else 620
 STEAM_ID = 76561197960265729   # compte individuel public valide, univers 1
 
 # Réponses explicites (corps de fonction C), par nom de fonction plate ;
@@ -36,6 +39,8 @@ RESPONSES = {
     'SteamAPI_ISteamUtils_GetCurrentBatteryPower': 'return 255;',
     'SteamAPI_ISteamUtils_GetConnectedUniverse': 'return 1;',
     'SteamAPI_ISteamUtils_GetSteamUILanguage': 'return "english";',
+    # Half-Life 2 réessaie l'initialisation de Steam Input tant qu'elle échoue.
+    'SteamAPI_ISteamInput_Init': 'return true;',
     'SteamAPI_ISteamFriends_GetPersonaName': 'return "Player";',
     'SteamAPI_ISteamFriends_GetPersonaState': 'return 1;',
     'SteamAPI_ISteamFriends_GetFriendPersonaName': 'return "Player";',

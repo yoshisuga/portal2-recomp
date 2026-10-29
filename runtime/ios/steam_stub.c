@@ -48,7 +48,13 @@ void *steam_stub_interface(const char *version) {
 }
 
 // ---- cycle de vie ----
-EXPORT bool SteamAPI_InitSafe(void) { fprintf(stderr, "[steam-stub] hors ligne : stub iOS, app 620\n"); return true; }
+EXPORT bool SteamAPI_InitSafe(void) { fprintf(stderr, "[steam-stub] hors ligne : stub iOS\n"); return true; }
+// SDK 1.60 (Half-Life 2) : ESteamAPIInitResult, 0 = réussi ; message d'erreur vide.
+EXPORT int32_t SteamInternal_SteamAPI_Init(const char *versions, char *message) {
+    (void)versions; if (message) message[0] = 0;
+    fprintf(stderr, "[steam-stub] hors ligne : stub iOS (SDK 1.60)\n");
+    return 0;
+}
 EXPORT void SteamAPI_Shutdown(void) {}
 EXPORT bool SteamAPI_RestartAppIfNecessary(uint32_t app) { (void)app; return false; }
 EXPORT int32_t SteamAPI_GetHSteamPipe(void) { return 1; }
@@ -61,6 +67,11 @@ EXPORT uint32_t SteamGameServer_GetIPCCallCount(void) { return 0; }
 EXPORT void SteamGameServer_Shutdown(void) {}
 EXPORT bool SteamInternal_GameServer_Init(uint32_t ip, uint16_t a, uint16_t b, uint16_t q, int32_t mode, const char *v) {
     (void)ip; (void)a; (void)b; (void)q; (void)mode; (void)v; return false;
+}
+// SDK 1.60 : même refus (pas de serveur de jeu Steam hors ligne), 1 = échec générique.
+EXPORT int32_t SteamInternal_GameServer_Init_V2(uint32_t ip, uint16_t a, uint16_t q, int32_t mode, const char *v,
+                                                const char *versions, char *message) {
+    (void)ip; (void)a; (void)q; (void)mode; (void)v; (void)versions; if (message) message[0] = 0; return 1;
 }
 
 // ---- callbacks : aucun ----

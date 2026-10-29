@@ -60,6 +60,7 @@ static unsigned char byte_get(const ByteMap *m, GLuint name) { return name < m->
 
 static ByteMap textures;          // TEX_* par texture
 static ByteMap renderbuffers;     // TEX_SRGB par renderbuffer
+static ByteMap written;           // cibles de rendu : 1 écrite encodée, 2 sans encodage (bits)
 // Par FBO : attachements couleur 0-3 (texture, ou renderbuffer | RENDERBUFFER_BIT)
 // et sortie de shader -> attachement (glDrawBuffers, état propre à chaque FBO).
 enum { OUTPUTS = 4 };
@@ -189,6 +190,7 @@ static void active_texture(GLenum unit) { active_unit = unit - GL_TEXTURE0; next
 static void delete_textures(GLsizei n, const GLuint *names) {
     for (GLsizei i = 0; i < n; ++i) {
         if (names[i] < textures.size) textures.flags[names[i]] = 0;
+        if (names[i] < written.size) written.flags[names[i]] = 0;
         if (names[i]) detach_everywhere(names[i]);
         for (int u = 0; u < UNITS; ++u)
             for (int k = 0; k < 3; ++k) if (bound[u][k] == names[i]) bound[u][k] = 0;
@@ -297,6 +299,33 @@ static void trace(const GLint *value, const ProgramState *s) {
                 draw_fbo, draw_fbo < fbo_count ? fbos[draw_fbo].attach[0] : 0);
 }
 
+// P2_IOS_SRGB_TRACE=2 : pour chaque texture rendue (attachement couleur 0 d'un
+// FBO), écriture encodée ou non ; à sa lecture, décodée ou non (une ligne par
+// combinaison et par texture).
+// P2_IOS_RT_BALANCE=0 : cibles de rendu lues telles que demandé (diagnostic).
+static int balance_rt(void) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("P2_IOS_RT_BALANCE"); on = !(e && *e == '0'); }
+    return on;
+}
+static void rt_trace(const GLint *value) {
+    static int enabled = -1;
+    if (enabled < 0) { const char *e = getenv("P2_IOS_SRGB_TRACE"); enabled = e && *e == '2'; }
+    if (!enabled) return;
+    static struct { GLuint t; unsigned char w, f, d; } seen[128]; static int nseen;
+    for (int u = 0; u < UNITS; ++u) {
+        GLuint t = bound[u][0];
+        unsigned char w = byte_get(&written, t);
+        if (!t || !w) continue;
+        unsigned char f = byte_get(&textures, t), d = (unsigned char)((value[0] >> u) & 1);
+        int known = 0;
+        for (int k = 0; k < nseen && !known; ++k) known = seen[k].t == t && seen[k].w == w && seen[k].f == f && seen[k].d == d;
+        if (known || nseen >= 128) continue;
+        seen[nseen].t = t; seen[nseen].w = w; seen[nseen].f = f; seen[nseen++].d = d;
+        fprintf(stderr, "[srgb-rt] texture %u (unité %u) : écrite %s, format sRGB %d, décodage ignoré %d, lue décodée %d (fbo de tracé %u)\n",
+                t, u, w == 1 ? "encodée" : w == 2 ? "brute" : "encodée+brute", (f & TEX_SRGB) != 0, (f & TEX_SKIP_DECODE) != 0, d, draw_fbo);
+    }
+}
 static void sync_uniforms(void) {
     if (!current_program) return;
     ProgramState *s = program_state(current_program);
@@ -311,12 +340,25 @@ static void sync_uniforms(void) {
             unsigned char f = byte_get(&textures, bound[u][k]);
             if ((f & (TEX_SRGB | TEX_SKIP_DECODE)) == TEX_SRGB) value[k] |= 1 << u;
         }
-        unsigned char f = byte_get(&textures, bound[u][0]);   // bordures : textures 2D
+        // Cible de rendu toujours écrite encodée (FRAMEBUFFER_SRGB) mais lue
+        // sans décodage (écran de Breen, caméra) : décodée quand même, sinon
+        // l'image ressort deux fois éclaircie (blanche).
+        unsigned char f2 = byte_get(&textures, bound[u][0]);
+        if ((f2 & TEX_SRGB) && byte_get(&written, bound[u][0]) == 1 && balance_rt()) value[0] |= 1 << u;
+        static int borders = -1;   // P2_IOS_BORDER=0 : émulation de CLAMP_TO_BORDER coupée (diagnostic)
+        if (borders < 0) { const char *e = getenv("P2_IOS_BORDER"); borders = !(e && *e == '0'); }
+        unsigned char f = borders ? byte_get(&textures, bound[u][0]) : 0;   // bordures : textures 2D
         if (f & TEX_BORDER_S) value[4] |= 1 << u;
         if (f & TEX_BORDER_T) value[5] |= 1 << u;
     }
     if (framebuffer_srgb) value[3] = srgb_outputs(draw_fbo);
+    if (draw_fbo && draw_fbo < fbo_count && fbos[draw_fbo].used) {   // écritures de chaque cible de rendu
+        GLuint t = fbos[draw_fbo].attach[0];
+        unsigned char *w = t && !(t & RENDERBUFFER_BIT) ? byte_at(&written, t) : NULL;
+        if (w) *w |= (value[3] & 1) ? 1 : 2;
+    }
     trace(value, s);
+    rt_trace(value);
     for (int k = 0; k < UNIFORMS; ++k) {
         if (s->loc[k] < 0 || s->value[k] == value[k]) continue;
         g4_uniform1i(s->loc[k], value[k]);
@@ -399,25 +441,105 @@ static int draw_skipped(const char *fn, GLenum mode, GLsizei count, GLuint start
     }
     return (long)index >= skip_a && (long)index < skip_b;
 }
+static void unit_trace(void);
 static void draw_arrays(GLenum m, GLint f, GLsizei c) {
     if (draw_skipped("arrays", m, c, (GLuint)f, 0, 0)) return;
-    sync_uniforms(); next_draw_arrays(m, f, c);
+    sync_uniforms(); next_draw_arrays(m, f, c); unit_trace();
+}
+// P2_IOS_UNIT_TRACE=1 : après un tracé, compare la texture 2D que togl a liée à
+// chaque unité avec celle réellement liée dans OpenGL ES, et l'unité que vise
+// l'uniforme sampler<u> du programme (premières divergences journalisées).
+static void unit_trace(void) {
+    static int enabled = -1, logged;
+    if (enabled < 0) { const char *e = getenv("P2_IOS_UNIT_TRACE"); enabled = e ? *e - '0' : 0; }
+    if (enabled == 3 && current_program && logged < 6) {   // 3 : texels réels de la texture de base des murs
+        GLint program = 0; glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+        if (glGetUniformLocation((GLuint)program, "sampler12") < 0 || !bound[0][0]) return;
+        GLint previous_read = 0; glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read);
+        GLuint fbo = 0; glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, bound[0][0], 0);
+        GLenum status = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
+        unsigned char px[4][4] = {{0}};
+        if (status == GL_FRAMEBUFFER_COMPLETE)
+            for (int k = 0; k < 4; ++k) glReadPixels(k * 7, k * 5, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px[k]);
+        fprintf(stderr, "[texel] tex %u statut %#x : %u,%u,%u,%u  %u,%u,%u,%u  %u,%u,%u,%u  %u,%u,%u,%u\n", bound[0][0], status,
+                px[0][0], px[0][1], px[0][2], px[0][3], px[1][0], px[1][1], px[1][2], px[1][3],
+                px[2][0], px[2][1], px[2][2], px[2][3], px[3][0], px[3][1], px[3][2], px[3][3]);
+        for (int level = 1; level <= 4; level += 3) {
+            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, bound[0][0], level);
+            unsigned char q[2][4] = {{0}};
+            GLenum st = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
+            if (st == GL_FRAMEBUFFER_COMPLETE) { glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, q[0]); glReadPixels(3, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, q[1]); }
+            fprintf(stderr, "[texel]   niveau %d statut %#x : %u,%u,%u,%u  %u,%u,%u,%u\n", level, st,
+                    q[0][0], q[0][1], q[0][2], q[0][3], q[1][0], q[1][1], q[1][2], q[1][3]);
+        }
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)previous_read);
+        glDeleteFramebuffers(1, &fbo);
+        GLint active = 0, sampler = 0, real = 0; glGetIntegerv(GL_ACTIVE_TEXTURE, &active);
+        glActiveTexture(GL_TEXTURE0);
+        glGetIntegerv(GL_SAMPLER_BINDING, &sampler); glGetIntegerv(GL_TEXTURE_BINDING_2D, &real);
+        static const GLenum names[] = {GL_TEXTURE_MIN_FILTER, GL_TEXTURE_MAG_FILTER, GL_TEXTURE_BASE_LEVEL, GL_TEXTURE_MAX_LEVEL,
+                                       GL_TEXTURE_COMPARE_MODE, GL_TEXTURE_SWIZZLE_R, GL_TEXTURE_SWIZZLE_G, GL_TEXTURE_SWIZZLE_B,
+                                       GL_TEXTURE_SWIZZLE_A, GL_TEXTURE_WRAP_S, GL_TEXTURE_IMMUTABLE_FORMAT};
+        GLint v[11] = {0}; GLfloat lod[2] = {0};
+        for (int k = 0; k < 11; ++k) glGetTexParameteriv(GL_TEXTURE_2D, names[k], &v[k]);
+        glGetTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_MIN_LOD, &lod[0]); glGetTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_MAX_LOD, &lod[1]);
+        fprintf(stderr, "[texel] unité 0 : ES tex %d, sampler ES %d, min %#x mag %#x base %d max %d compare %#x swizzle %#x %#x %#x %#x "
+                "wrap %#x immuable %d lod %g..%g\n", real, sampler, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10],
+                lod[0], lod[1]);
+        if (sampler) {
+            GLint sv[3] = {0};
+            glGetSamplerParameteriv((GLuint)sampler, GL_TEXTURE_MIN_FILTER, &sv[0]);
+            glGetSamplerParameteriv((GLuint)sampler, GL_TEXTURE_COMPARE_MODE, &sv[1]);
+            glGetSamplerParameteriv((GLuint)sampler, GL_TEXTURE_MAG_FILTER, &sv[2]);
+            fprintf(stderr, "[texel] sampler ES %d : min %#x mag %#x compare %#x\n", sampler, sv[0], sv[2], sv[1]);
+        }
+        glActiveTexture((GLenum)active);
+        ++logged;
+        return;
+    }
+    if (enabled == 2 && current_program) {   // 2 : textures des unités 0 et 12 des programmes à lightmap
+        GLint program = 0; glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+        if (glGetUniformLocation((GLuint)program, "sampler12") >= 0 && logged < 400) {
+            fprintf(stderr, "[unit] monde : unité 0 = %u, unité 1 = %u, unité 12 = %u\n", bound[0][0], bound[1][0], bound[12][0]);
+            ++logged;
+        }
+        return;
+    }
+    if (!enabled || logged >= 60 || !current_program) return;
+    GLint active = 0; glGetIntegerv(GL_ACTIVE_TEXTURE, &active);
+    GLint program = 0; glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+    for (int u = 0; u < 16 && logged < 60; ++u) {
+        char name[16]; snprintf(name, sizeof(name), "sampler%d", u);
+        GLint loc = glGetUniformLocation((GLuint)program, name), target_unit = -1;
+        if (loc < 0) continue;
+        glGetUniformiv((GLuint)program, loc, &target_unit);
+        GLint real = 0;
+        glActiveTexture(GL_TEXTURE0 + (GLenum)target_unit); glGetIntegerv(GL_TEXTURE_BINDING_2D, &real);
+        if ((GLuint)real != bound[u][0] || target_unit != u) {
+            fprintf(stderr, "[unit] programme togl %u es %d : %s -> unité %d, togl %u, ES %d\n",
+                    current_program, program, name, target_unit, bound[u][0], real);
+            ++logged;
+        }
+    }
+    glActiveTexture((GLenum)active);
 }
 static void draw_elements(GLenum m, GLsizei c, GLenum t, const void *i) {
     if (draw_skipped("elements", m, c, 0, 0, 0)) return;
-    sync_uniforms(); next_draw_elements(m, c, t, i);
+    sync_uniforms(); next_draw_elements(m, c, t, i); unit_trace();
 }
 static void draw_range_elements(GLenum m, GLuint s, GLuint e, GLsizei c, GLenum t, const void *i) {
     if (draw_skipped("range", m, c, s, e, 0)) return;
-    sync_uniforms(); next_draw_range_elements(m, s, e, c, t, i);
+    sync_uniforms(); next_draw_range_elements(m, s, e, c, t, i); unit_trace();
 }
 static void draw_elements_base_vertex(GLenum m, GLsizei c, GLenum t, const void *i, GLint b) {
     if (draw_skipped("elements_base", m, c, 0, 0, b)) return;
-    sync_uniforms(); next_draw_elements_base_vertex(m, c, t, i, b);
+    sync_uniforms(); next_draw_elements_base_vertex(m, c, t, i, b); unit_trace();
 }
 static void draw_range_elements_base_vertex(GLenum m, GLuint s, GLuint e, GLsizei c, GLenum t, const void *i, GLint b) {
     if (draw_skipped("range_base", m, c, s, e, b)) return;
-    sync_uniforms(); next_draw_range_elements_base_vertex(m, s, e, c, t, i, b);
+    sync_uniforms(); next_draw_range_elements_base_vertex(m, s, e, c, t, i, b); unit_trace();
 }
 
 // Enveloppe `fn` (ce que togl aurait reçu pour `name`) si ce module suit cette

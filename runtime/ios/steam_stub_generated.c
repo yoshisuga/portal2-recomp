@@ -9,18 +9,13 @@
 #define EXPORT __attribute__((visibility("default"), used))
 void *steam_stub_interface(const char *version);
 int32_t steam_stub_ticket(void *buffer, int32_t capacity);
-EXPORT int32_t SteamAPI_ISteamAppList_GetAppBuildId(void *a0, uint32_t a1) { (void)a0; (void)a1; return 0; }
-EXPORT int32_t SteamAPI_ISteamAppList_GetAppInstallDir(void *a0, uint32_t a1, void *a2, int32_t a3) { (void)a0; (void)a1; (void)a2; (void)a3; return 0; }
-EXPORT int32_t SteamAPI_ISteamAppList_GetAppName(void *a0, uint32_t a1, void *a2, int32_t a3) { (void)a0; (void)a1; (void)a2; (void)a3; return 0; }
-EXPORT uint32_t SteamAPI_ISteamAppList_GetInstalledApps(void *a0, void *a1, uint32_t a2) { (void)a0; (void)a1; (void)a2; return 0; }
-EXPORT uint32_t SteamAPI_ISteamAppList_GetNumInstalledApps(void *a0) { (void)a0; return 0; }
 EXPORT bool SteamAPI_ISteamApps_BGetDLCDataByIndex(void *a0, int32_t a1, void *a2, void *a3, void *a4, int32_t a5) { (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; return false; }
-EXPORT bool SteamAPI_ISteamApps_BIsAppInstalled(void *a0, uint32_t a1) { (void)a0; (void)a1; return a1 == 620u; }
+EXPORT bool SteamAPI_ISteamApps_BIsAppInstalled(void *a0, uint32_t a1) { (void)a0; (void)a1; return a1 == 220u; }
 EXPORT bool SteamAPI_ISteamApps_BIsCybercafe(void *a0) { (void)a0; return false; }
 EXPORT bool SteamAPI_ISteamApps_BIsDlcInstalled(void *a0, uint32_t a1) { (void)a0; (void)a1; return false; }
 EXPORT bool SteamAPI_ISteamApps_BIsLowViolence(void *a0) { (void)a0; return false; }
 EXPORT bool SteamAPI_ISteamApps_BIsSubscribed(void *a0) { (void)a0; return true; }
-EXPORT bool SteamAPI_ISteamApps_BIsSubscribedApp(void *a0, uint32_t a1) { (void)a0; (void)a1; return a1 == 620u; }
+EXPORT bool SteamAPI_ISteamApps_BIsSubscribedApp(void *a0, uint32_t a1) { (void)a0; (void)a1; return a1 == 220u; }
 EXPORT bool SteamAPI_ISteamApps_BIsSubscribedFromFamilySharing(void *a0) { (void)a0; return false; }
 EXPORT bool SteamAPI_ISteamApps_BIsSubscribedFromFreeWeekend(void *a0) { (void)a0; return false; }
 EXPORT bool SteamAPI_ISteamApps_BIsTimedTrial(void *a0, void *a1, void *a2) { (void)a0; (void)a1; (void)a2; return false; }
@@ -42,6 +37,7 @@ EXPORT void SteamAPI_ISteamApps_InstallDLC(void *a0, uint32_t a1) { (void)a0; (v
 EXPORT bool SteamAPI_ISteamApps_MarkContentCorrupt(void *a0, bool a1) { (void)a0; (void)a1; return false; }
 EXPORT void SteamAPI_ISteamApps_RequestAllProofOfPurchaseKeys(void *a0) { (void)a0;  }
 EXPORT void SteamAPI_ISteamApps_RequestAppProofOfPurchaseKey(void *a0, uint32_t a1) { (void)a0; (void)a1;  }
+EXPORT bool SteamAPI_ISteamApps_SetDlcContext(void *a0, uint32_t a1) { (void)a0; (void)a1; return false; }
 EXPORT void SteamAPI_ISteamApps_UninstallDLC(void *a0, uint32_t a1) { (void)a0; (void)a1;  }
 EXPORT bool SteamAPI_ISteamClient_BReleaseSteamPipe(void *a0, int32_t a1) { (void)a0; (void)a1; return false; }
 EXPORT bool SteamAPI_ISteamClient_BShutdownIfAllPipesClosed(void *a0) { (void)a0; return false; }
@@ -49,7 +45,6 @@ EXPORT int32_t SteamAPI_ISteamClient_ConnectToGlobalUser(void *a0, int32_t a1) {
 EXPORT int32_t SteamAPI_ISteamClient_CreateLocalUser(void *a0, void *a1, int32_t a2) { (void)a0; (void)a1; (void)a2; return 0; }
 EXPORT int32_t SteamAPI_ISteamClient_CreateSteamPipe(void *a0) { (void)a0; return 0; }
 EXPORT uint32_t SteamAPI_ISteamClient_GetIPCCallCount(void *a0) { (void)a0; return 0; }
-EXPORT void *SteamAPI_ISteamClient_GetISteamAppList(void *a0, int32_t a1, int32_t a2, const char *a3) { (void)a0; (void)a1; (void)a2; (void)a3; return steam_stub_interface(a3); }
 EXPORT void *SteamAPI_ISteamClient_GetISteamApps(void *a0, int32_t a1, int32_t a2, const char *a3) { (void)a0; (void)a1; (void)a2; (void)a3; return steam_stub_interface(a3); }
 EXPORT void *SteamAPI_ISteamClient_GetISteamController(void *a0, int32_t a1, int32_t a2, const char *a3) { (void)a0; (void)a1; (void)a2; (void)a3; return steam_stub_interface(a3); }
 EXPORT void *SteamAPI_ISteamClient_GetISteamFriends(void *a0, int32_t a1, int32_t a2, const char *a3) { (void)a0; (void)a1; (void)a2; (void)a3; return steam_stub_interface(a3); }
@@ -115,6 +110,7 @@ EXPORT void SteamAPI_ISteamFriends_ActivateGameOverlayRemotePlayTogetherInviteDi
 EXPORT void SteamAPI_ISteamFriends_ActivateGameOverlayToStore(void *a0, uint32_t a1, int32_t a2) { (void)a0; (void)a1; (void)a2;  }
 EXPORT void SteamAPI_ISteamFriends_ActivateGameOverlayToUser(void *a0, const char *a1, uint64_t a2) { (void)a0; (void)a1; (void)a2;  }
 EXPORT void SteamAPI_ISteamFriends_ActivateGameOverlayToWebPage(void *a0, const char *a1, int32_t a2) { (void)a0; (void)a1; (void)a2;  }
+EXPORT bool SteamAPI_ISteamFriends_BHasEquippedProfileItem(void *a0, uint64_t a1, int32_t a2) { (void)a0; (void)a1; (void)a2; return false; }
 EXPORT void SteamAPI_ISteamFriends_ClearRichPresence(void *a0) { (void)a0;  }
 EXPORT bool SteamAPI_ISteamFriends_CloseClanChatWindowInSteam(void *a0, uint64_t a1) { (void)a0; (void)a1; return false; }
 EXPORT uint64_t SteamAPI_ISteamFriends_DownloadClanActivityCounts(void *a0, void *a1, int32_t a2) { (void)a0; (void)a1; (void)a2; return 0; }
@@ -160,6 +156,8 @@ EXPORT int32_t SteamAPI_ISteamFriends_GetNumChatsWithUnreadPriorityMessages(void
 EXPORT const char *SteamAPI_ISteamFriends_GetPersonaName(void *a0) { (void)a0; return "Player"; }
 EXPORT int32_t SteamAPI_ISteamFriends_GetPersonaState(void *a0) { (void)a0; return 1; }
 EXPORT const char *SteamAPI_ISteamFriends_GetPlayerNickname(void *a0, uint64_t a1) { (void)a0; (void)a1; return ""; }
+EXPORT const char *SteamAPI_ISteamFriends_GetProfileItemPropertyString(void *a0, uint64_t a1, int32_t a2, int32_t a3) { (void)a0; (void)a1; (void)a2; (void)a3; return ""; }
+EXPORT uint32_t SteamAPI_ISteamFriends_GetProfileItemPropertyUint(void *a0, uint64_t a1, int32_t a2, int32_t a3) { (void)a0; (void)a1; (void)a2; (void)a3; return 0; }
 EXPORT int32_t SteamAPI_ISteamFriends_GetSmallFriendAvatar(void *a0, uint64_t a1) { (void)a0; (void)a1; return 0; }
 EXPORT uint32_t SteamAPI_ISteamFriends_GetUserRestrictions(void *a0) { (void)a0; return 0; }
 EXPORT bool SteamAPI_ISteamFriends_HasFriend(void *a0, uint64_t a1, int32_t a2) { (void)a0; (void)a1; (void)a2; return false; }
@@ -176,6 +174,7 @@ EXPORT bool SteamAPI_ISteamFriends_OpenClanChatWindowInSteam(void *a0, uint64_t 
 EXPORT bool SteamAPI_ISteamFriends_RegisterProtocolInOverlayBrowser(void *a0, const char *a1) { (void)a0; (void)a1; return false; }
 EXPORT bool SteamAPI_ISteamFriends_ReplyToFriendMessage(void *a0, uint64_t a1, const char *a2) { (void)a0; (void)a1; (void)a2; return false; }
 EXPORT uint64_t SteamAPI_ISteamFriends_RequestClanOfficerList(void *a0, uint64_t a1) { (void)a0; (void)a1; return 0; }
+EXPORT uint64_t SteamAPI_ISteamFriends_RequestEquippedProfileItems(void *a0, uint64_t a1) { (void)a0; (void)a1; return 0; }
 EXPORT void SteamAPI_ISteamFriends_RequestFriendRichPresence(void *a0, uint64_t a1) { (void)a0; (void)a1;  }
 EXPORT bool SteamAPI_ISteamFriends_RequestUserInformation(void *a0, uint64_t a1, bool a2) { (void)a0; (void)a1; (void)a2; return false; }
 EXPORT bool SteamAPI_ISteamFriends_SendClanChatMessage(void *a0, uint64_t a1, const char *a2) { (void)a0; (void)a1; (void)a2; return false; }
@@ -218,7 +217,6 @@ EXPORT void SteamAPI_ISteamGameServer_ClearAllKeyValues(void *a0) { (void)a0;  }
 EXPORT uint64_t SteamAPI_ISteamGameServer_ComputeNewPlayerCompatibility(void *a0, uint64_t a1) { (void)a0; (void)a1; return 0; }
 EXPORT uint64_t SteamAPI_ISteamGameServer_CreateUnauthenticatedUserConnection(void *a0) { (void)a0; return 0; }
 EXPORT void SteamAPI_ISteamGameServer_EndAuthSession(void *a0, uint64_t a1) { (void)a0; (void)a1;  }
-EXPORT uint32_t SteamAPI_ISteamGameServer_GetAuthSessionTicket(void *a0, void *a1, int32_t a2, void *a3) { (void)a0; (void)a1; (void)a2; (void)a3; int32_t n = steam_stub_ticket(a1, a2); if (a3) *(uint32_t *)a3 = (uint32_t)n; return n > 0 ? 1u : 0u; }
 EXPORT void SteamAPI_ISteamGameServer_GetGameplayStats(void *a0) { (void)a0;  }
 EXPORT int32_t SteamAPI_ISteamGameServer_GetNextOutgoingPacket(void *a0, void *a1, int32_t a2, void *a3, void *a4) { (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; return 0; }
 EXPORT uint64_t SteamAPI_ISteamGameServer_GetServerReputation(void *a0) { (void)a0; return 0; }
@@ -338,7 +336,7 @@ EXPORT const char *SteamAPI_ISteamInput_GetStringForActionOrigin(void *a0, int32
 EXPORT const char *SteamAPI_ISteamInput_GetStringForAnalogActionName(void *a0, uint64_t a1) { (void)a0; (void)a1; return ""; }
 EXPORT const char *SteamAPI_ISteamInput_GetStringForDigitalActionName(void *a0, uint64_t a1) { (void)a0; (void)a1; return ""; }
 EXPORT const char *SteamAPI_ISteamInput_GetStringForXboxOrigin(void *a0, int32_t a1) { (void)a0; (void)a1; return ""; }
-EXPORT bool SteamAPI_ISteamInput_Init(void *a0, bool a1) { (void)a0; (void)a1; return false; }
+EXPORT bool SteamAPI_ISteamInput_Init(void *a0, bool a1) { (void)a0; (void)a1; return true; }
 EXPORT void SteamAPI_ISteamInput_Legacy_TriggerHapticPulse(void *a0, uint64_t a1, int32_t a2, uint16_t a3) { (void)a0; (void)a1; (void)a2; (void)a3;  }
 EXPORT void SteamAPI_ISteamInput_Legacy_TriggerRepeatedHapticPulse(void *a0, uint64_t a1, int32_t a2, uint16_t a3, uint16_t a4, uint16_t a5, uint32_t a6) { (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;  }
 EXPORT void SteamAPI_ISteamInput_RunFrame(void *a0, bool a1) { (void)a0; (void)a1;  }
@@ -479,6 +477,22 @@ EXPORT bool SteamAPI_ISteamParentalSettings_BIsFeatureBlocked(void *a0, int32_t 
 EXPORT bool SteamAPI_ISteamParentalSettings_BIsFeatureInBlockList(void *a0, int32_t a1) { (void)a0; (void)a1; return false; }
 EXPORT bool SteamAPI_ISteamParentalSettings_BIsParentalLockEnabled(void *a0) { (void)a0; return false; }
 EXPORT bool SteamAPI_ISteamParentalSettings_BIsParentalLockLocked(void *a0) { (void)a0; return false; }
+EXPORT void SteamAPI_ISteamParties_CancelReservation(void *a0, uint64_t a1, uint64_t a2) { (void)a0; (void)a1; (void)a2;  }
+EXPORT uint64_t SteamAPI_ISteamParties_ChangeNumOpenSlots(void *a0, uint64_t a1, uint32_t a2) { (void)a0; (void)a1; (void)a2; return 0; }
+EXPORT bool SteamAPI_ISteamParties_DestroyBeacon(void *a0, uint64_t a1) { (void)a0; (void)a1; return false; }
+EXPORT uint64_t SteamAPI_ISteamParties_GetBeaconByIndex(void *a0, uint32_t a1) { (void)a0; (void)a1; return 0; }
+EXPORT uint32_t SteamAPI_ISteamParties_GetNumActiveBeacons(void *a0) { (void)a0; return 0; }
+EXPORT bool SteamAPI_ISteamParties_GetNumAvailableBeaconLocations(void *a0, void *a1) { (void)a0; (void)a1; return false; }
+EXPORT uint64_t SteamAPI_ISteamParties_JoinParty(void *a0, uint64_t a1) { (void)a0; (void)a1; return 0; }
+EXPORT void SteamAPI_ISteamParties_OnReservationCompleted(void *a0, uint64_t a1, uint64_t a2) { (void)a0; (void)a1; (void)a2;  }
+EXPORT bool SteamAPI_ISteamRemotePlay_BGetSessionClientResolution(void *a0, uint32_t a1, void *a2, void *a3) { (void)a0; (void)a1; (void)a2; (void)a3; return false; }
+EXPORT bool SteamAPI_ISteamRemotePlay_BSendRemotePlayTogetherInvite(void *a0, uint64_t a1) { (void)a0; (void)a1; return false; }
+EXPORT bool SteamAPI_ISteamRemotePlay_BStartRemotePlayTogether(void *a0, bool a1) { (void)a0; (void)a1; return false; }
+EXPORT int32_t SteamAPI_ISteamRemotePlay_GetSessionClientFormFactor(void *a0, uint32_t a1) { (void)a0; (void)a1; return 0; }
+EXPORT const char *SteamAPI_ISteamRemotePlay_GetSessionClientName(void *a0, uint32_t a1) { (void)a0; (void)a1; return ""; }
+EXPORT uint32_t SteamAPI_ISteamRemotePlay_GetSessionCount(void *a0) { (void)a0; return 0; }
+EXPORT uint32_t SteamAPI_ISteamRemotePlay_GetSessionID(void *a0, int32_t a1) { (void)a0; (void)a1; return 0; }
+EXPORT uint64_t SteamAPI_ISteamRemotePlay_GetSessionSteamID(void *a0, uint32_t a1) { (void)a0; (void)a1; return 0; }
 EXPORT bool SteamAPI_ISteamRemoteStorage_BeginFileWriteBatch(void *a0) { (void)a0; return false; }
 EXPORT uint64_t SteamAPI_ISteamRemoteStorage_CommitPublishedFileUpdate(void *a0, uint64_t a1) { (void)a0; (void)a1; return 0; }
 EXPORT uint64_t SteamAPI_ISteamRemoteStorage_CreatePublishedFileUpdateRequest(void *a0, uint64_t a1) { (void)a0; (void)a1; return 0; }
@@ -513,6 +527,7 @@ EXPORT uint64_t SteamAPI_ISteamRemoteStorage_GetPublishedFileDetails(void *a0, u
 EXPORT uint64_t SteamAPI_ISteamRemoteStorage_GetPublishedItemVoteDetails(void *a0, uint64_t a1) { (void)a0; (void)a1; return 0; }
 EXPORT bool SteamAPI_ISteamRemoteStorage_GetQuota(void *a0, void *a1, void *a2) { (void)a0; (void)a1; (void)a2; return false; }
 EXPORT int32_t SteamAPI_ISteamRemoteStorage_GetSyncPlatforms(void *a0, const char *a1) { (void)a0; (void)a1; return 0; }
+EXPORT bool SteamAPI_ISteamRemoteStorage_GetUGCDetails(void *a0, uint64_t a1, void *a2, const char **a3, void *a4, void *a5) { (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; return false; }
 EXPORT bool SteamAPI_ISteamRemoteStorage_GetUGCDownloadProgress(void *a0, uint64_t a1, void *a2, void *a3) { (void)a0; (void)a1; (void)a2; (void)a3; return false; }
 EXPORT uint64_t SteamAPI_ISteamRemoteStorage_GetUserPublishedItemVoteDetails(void *a0, uint64_t a1) { (void)a0; (void)a1; return 0; }
 EXPORT bool SteamAPI_ISteamRemoteStorage_IsCloudEnabledForAccount(void *a0) { (void)a0; return false; }
@@ -541,7 +556,12 @@ EXPORT bool SteamAPI_ISteamScreenshots_TagPublishedFile(void *a0, uint32_t a1, u
 EXPORT bool SteamAPI_ISteamScreenshots_TagUser(void *a0, uint32_t a1, uint64_t a2) { (void)a0; (void)a1; (void)a2; return false; }
 EXPORT void SteamAPI_ISteamScreenshots_TriggerScreenshot(void *a0) { (void)a0;  }
 EXPORT uint32_t SteamAPI_ISteamScreenshots_WriteScreenshot(void *a0, void *a1, uint32_t a2, int32_t a3, int32_t a4) { (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; return 0; }
+EXPORT void SteamAPI_ISteamTimeline_AddTimelineEvent(void *a0, const char *a1, const char *a2, const char *a3, uint32_t a4, float a5, float a6, int32_t a7) { (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6; (void)a7;  }
+EXPORT void SteamAPI_ISteamTimeline_ClearTimelineStateDescription(void *a0, float a1) { (void)a0; (void)a1;  }
+EXPORT void SteamAPI_ISteamTimeline_SetTimelineGameMode(void *a0, int32_t a1) { (void)a0; (void)a1;  }
+EXPORT void SteamAPI_ISteamTimeline_SetTimelineStateDescription(void *a0, const char *a1, float a2) { (void)a0; (void)a1; (void)a2;  }
 EXPORT uint64_t SteamAPI_ISteamUGC_AddAppDependency(void *a0, uint64_t a1, uint32_t a2) { (void)a0; (void)a1; (void)a2; return 0; }
+EXPORT bool SteamAPI_ISteamUGC_AddContentDescriptor(void *a0, uint64_t a1, int32_t a2) { (void)a0; (void)a1; (void)a2; return false; }
 EXPORT uint64_t SteamAPI_ISteamUGC_AddDependency(void *a0, uint64_t a1, uint64_t a2) { (void)a0; (void)a1; (void)a2; return 0; }
 EXPORT bool SteamAPI_ISteamUGC_AddExcludedTag(void *a0, uint64_t a1, const char *a2) { (void)a0; (void)a1; (void)a2; return false; }
 EXPORT bool SteamAPI_ISteamUGC_AddItemKeyValueTag(void *a0, uint64_t a1, const char *a2, const char *a3) { (void)a0; (void)a1; (void)a2; (void)a3; return false; }
@@ -554,6 +574,7 @@ EXPORT bool SteamAPI_ISteamUGC_BInitWorkshopForGameServer(void *a0, uint32_t a1,
 EXPORT uint64_t SteamAPI_ISteamUGC_CreateItem(void *a0, uint32_t a1, int32_t a2) { (void)a0; (void)a1; (void)a2; return 0; }
 EXPORT uint64_t SteamAPI_ISteamUGC_CreateQueryAllUGCRequestCursor(void *a0, int32_t a1, int32_t a2, uint32_t a3, uint32_t a4, const char *a5) { (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; return 0; }
 EXPORT uint64_t SteamAPI_ISteamUGC_CreateQueryAllUGCRequestPage(void *a0, int32_t a1, int32_t a2, uint32_t a3, uint32_t a4, uint32_t a5) { (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; return 0; }
+EXPORT uint64_t SteamAPI_ISteamUGC_CreateQueryUGCDetailsRequest(void *a0, void *a1, uint32_t a2) { (void)a0; (void)a1; (void)a2; return 0; }
 EXPORT uint64_t SteamAPI_ISteamUGC_CreateQueryUserUGCRequest(void *a0, uint32_t a1, int32_t a2, int32_t a3, int32_t a4, uint32_t a5, uint32_t a6, uint32_t a7) { (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6; (void)a7; return 0; }
 EXPORT uint64_t SteamAPI_ISteamUGC_DeleteItem(void *a0, uint64_t a1) { (void)a0; (void)a1; return 0; }
 EXPORT bool SteamAPI_ISteamUGC_DownloadItem(void *a0, uint64_t a1, bool a2) { (void)a0; (void)a1; (void)a2; return false; }
@@ -563,8 +584,10 @@ EXPORT bool SteamAPI_ISteamUGC_GetItemInstallInfo(void *a0, uint64_t a1, void *a
 EXPORT uint32_t SteamAPI_ISteamUGC_GetItemState(void *a0, uint64_t a1) { (void)a0; (void)a1; return 0; }
 EXPORT int32_t SteamAPI_ISteamUGC_GetItemUpdateProgress(void *a0, uint64_t a1, void *a2, void *a3) { (void)a0; (void)a1; (void)a2; (void)a3; return 0; }
 EXPORT uint32_t SteamAPI_ISteamUGC_GetNumSubscribedItems(void *a0) { (void)a0; return 0; }
+EXPORT uint32_t SteamAPI_ISteamUGC_GetNumSupportedGameVersions(void *a0, uint64_t a1, uint32_t a2) { (void)a0; (void)a1; (void)a2; return 0; }
 EXPORT bool SteamAPI_ISteamUGC_GetQueryFirstUGCKeyValueTag(void *a0, uint64_t a1, uint32_t a2, const char *a3, void *a4, uint32_t a5) { (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; return false; }
 EXPORT bool SteamAPI_ISteamUGC_GetQueryUGCChildren(void *a0, uint64_t a1, uint32_t a2, void *a3, uint32_t a4) { (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; return false; }
+EXPORT uint32_t SteamAPI_ISteamUGC_GetQueryUGCContentDescriptors(void *a0, uint64_t a1, uint32_t a2, void *a3, uint32_t a4) { (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; return 0; }
 EXPORT bool SteamAPI_ISteamUGC_GetQueryUGCKeyValueTag(void *a0, uint64_t a1, uint32_t a2, uint32_t a3, void *a4, uint32_t a5, void *a6, uint32_t a7) { (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6; (void)a7; return false; }
 EXPORT bool SteamAPI_ISteamUGC_GetQueryUGCMetadata(void *a0, uint64_t a1, uint32_t a2, void *a3, uint32_t a4) { (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; return false; }
 EXPORT uint32_t SteamAPI_ISteamUGC_GetQueryUGCNumAdditionalPreviews(void *a0, uint64_t a1, uint32_t a2) { (void)a0; (void)a1; (void)a2; return 0; }
@@ -575,17 +598,20 @@ EXPORT bool SteamAPI_ISteamUGC_GetQueryUGCStatistic(void *a0, uint64_t a1, uint3
 EXPORT bool SteamAPI_ISteamUGC_GetQueryUGCTag(void *a0, uint64_t a1, uint32_t a2, uint32_t a3, void *a4, uint32_t a5) { (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; return false; }
 EXPORT bool SteamAPI_ISteamUGC_GetQueryUGCTagDisplayName(void *a0, uint64_t a1, uint32_t a2, uint32_t a3, void *a4, uint32_t a5) { (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; return false; }
 EXPORT uint32_t SteamAPI_ISteamUGC_GetSubscribedItems(void *a0, void *a1, uint32_t a2) { (void)a0; (void)a1; (void)a2; return 0; }
+EXPORT uint32_t SteamAPI_ISteamUGC_GetUserContentDescriptorPreferences(void *a0, void *a1, uint32_t a2) { (void)a0; (void)a1; (void)a2; return 0; }
 EXPORT uint64_t SteamAPI_ISteamUGC_GetUserItemVote(void *a0, uint64_t a1) { (void)a0; (void)a1; return 0; }
 EXPORT uint64_t SteamAPI_ISteamUGC_GetWorkshopEULAStatus(void *a0) { (void)a0; return 0; }
 EXPORT bool SteamAPI_ISteamUGC_ReleaseQueryUGCRequest(void *a0, uint64_t a1) { (void)a0; (void)a1; return false; }
 EXPORT bool SteamAPI_ISteamUGC_RemoveAllItemKeyValueTags(void *a0, uint64_t a1) { (void)a0; (void)a1; return false; }
 EXPORT uint64_t SteamAPI_ISteamUGC_RemoveAppDependency(void *a0, uint64_t a1, uint32_t a2) { (void)a0; (void)a1; (void)a2; return 0; }
+EXPORT bool SteamAPI_ISteamUGC_RemoveContentDescriptor(void *a0, uint64_t a1, int32_t a2) { (void)a0; (void)a1; (void)a2; return false; }
 EXPORT uint64_t SteamAPI_ISteamUGC_RemoveDependency(void *a0, uint64_t a1, uint64_t a2) { (void)a0; (void)a1; (void)a2; return 0; }
 EXPORT uint64_t SteamAPI_ISteamUGC_RemoveItemFromFavorites(void *a0, uint32_t a1, uint64_t a2) { (void)a0; (void)a1; (void)a2; return 0; }
 EXPORT bool SteamAPI_ISteamUGC_RemoveItemKeyValueTags(void *a0, uint64_t a1, const char *a2) { (void)a0; (void)a1; (void)a2; return false; }
 EXPORT bool SteamAPI_ISteamUGC_RemoveItemPreview(void *a0, uint64_t a1, uint32_t a2) { (void)a0; (void)a1; (void)a2; return false; }
 EXPORT uint64_t SteamAPI_ISteamUGC_RequestUGCDetails(void *a0, uint64_t a1, uint32_t a2) { (void)a0; (void)a1; (void)a2; return 0; }
 EXPORT uint64_t SteamAPI_ISteamUGC_SendQueryUGCRequest(void *a0, uint64_t a1) { (void)a0; (void)a1; return 0; }
+EXPORT bool SteamAPI_ISteamUGC_SetAdminQuery(void *a0, uint64_t a1, bool a2) { (void)a0; (void)a1; (void)a2; return false; }
 EXPORT bool SteamAPI_ISteamUGC_SetAllowCachedResponse(void *a0, uint64_t a1, uint32_t a2) { (void)a0; (void)a1; (void)a2; return false; }
 EXPORT bool SteamAPI_ISteamUGC_SetAllowLegacyUpload(void *a0, uint64_t a1, bool a2) { (void)a0; (void)a1; (void)a2; return false; }
 EXPORT bool SteamAPI_ISteamUGC_SetCloudFileNameFilter(void *a0, uint64_t a1, const char *a2) { (void)a0; (void)a1; (void)a2; return false; }
@@ -599,6 +625,7 @@ EXPORT bool SteamAPI_ISteamUGC_SetItemVisibility(void *a0, uint64_t a1, int32_t 
 EXPORT bool SteamAPI_ISteamUGC_SetLanguage(void *a0, uint64_t a1, const char *a2) { (void)a0; (void)a1; (void)a2; return false; }
 EXPORT bool SteamAPI_ISteamUGC_SetMatchAnyTag(void *a0, uint64_t a1, bool a2) { (void)a0; (void)a1; (void)a2; return false; }
 EXPORT bool SteamAPI_ISteamUGC_SetRankedByTrendDays(void *a0, uint64_t a1, uint32_t a2) { (void)a0; (void)a1; (void)a2; return false; }
+EXPORT bool SteamAPI_ISteamUGC_SetRequiredGameVersions(void *a0, uint64_t a1, const char *a2, const char *a3) { (void)a0; (void)a1; (void)a2; (void)a3; return false; }
 EXPORT bool SteamAPI_ISteamUGC_SetReturnAdditionalPreviews(void *a0, uint64_t a1, bool a2) { (void)a0; (void)a1; (void)a2; return false; }
 EXPORT bool SteamAPI_ISteamUGC_SetReturnChildren(void *a0, uint64_t a1, bool a2) { (void)a0; (void)a1; (void)a2; return false; }
 EXPORT bool SteamAPI_ISteamUGC_SetReturnKeyValueTags(void *a0, uint64_t a1, bool a2) { (void)a0; (void)a1; (void)a2; return false; }
@@ -613,6 +640,8 @@ EXPORT bool SteamAPI_ISteamUGC_SetTimeUpdatedDateRange(void *a0, uint64_t a1, ui
 EXPORT uint64_t SteamAPI_ISteamUGC_SetUserItemVote(void *a0, uint64_t a1, bool a2) { (void)a0; (void)a1; (void)a2; return 0; }
 EXPORT bool SteamAPI_ISteamUGC_ShowWorkshopEULA(void *a0) { (void)a0; return false; }
 EXPORT uint64_t SteamAPI_ISteamUGC_StartItemUpdate(void *a0, uint32_t a1, uint64_t a2) { (void)a0; (void)a1; (void)a2; return 0; }
+EXPORT uint64_t SteamAPI_ISteamUGC_StartPlaytimeTracking(void *a0, void *a1, uint32_t a2) { (void)a0; (void)a1; (void)a2; return 0; }
+EXPORT uint64_t SteamAPI_ISteamUGC_StopPlaytimeTracking(void *a0, void *a1, uint32_t a2) { (void)a0; (void)a1; (void)a2; return 0; }
 EXPORT uint64_t SteamAPI_ISteamUGC_StopPlaytimeTrackingForAllItems(void *a0) { (void)a0; return 0; }
 EXPORT uint64_t SteamAPI_ISteamUGC_SubmitItemUpdate(void *a0, uint64_t a1, const char *a2) { (void)a0; (void)a1; (void)a2; return 0; }
 EXPORT uint64_t SteamAPI_ISteamUGC_SubscribeItem(void *a0, uint64_t a1) { (void)a0; (void)a1; return 0; }
@@ -675,7 +704,7 @@ EXPORT int32_t SteamAPI_ISteamUser_BeginAuthSession(void *a0, void *a1, int32_t 
 EXPORT void SteamAPI_ISteamUser_CancelAuthTicket(void *a0, uint32_t a1) { (void)a0; (void)a1;  }
 EXPORT int32_t SteamAPI_ISteamUser_DecompressVoice(void *a0, void *a1, uint32_t a2, void *a3, uint32_t a4, void *a5, uint32_t a6) { (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6; return 0; }
 EXPORT void SteamAPI_ISteamUser_EndAuthSession(void *a0, uint64_t a1) { (void)a0; (void)a1;  }
-EXPORT uint32_t SteamAPI_ISteamUser_GetAuthSessionTicket(void *a0, void *a1, int32_t a2, void *a3) { (void)a0; (void)a1; (void)a2; (void)a3; int32_t n = steam_stub_ticket(a1, a2); if (a3) *(uint32_t *)a3 = (uint32_t)n; return n > 0 ? 1u : 0u; }
+EXPORT uint32_t SteamAPI_ISteamUser_GetAuthTicketForWebApi(void *a0, const char *a1) { (void)a0; (void)a1; return 0; }
 EXPORT uint64_t SteamAPI_ISteamUser_GetDurationControl(void *a0) { (void)a0; return 0; }
 EXPORT bool SteamAPI_ISteamUser_GetEncryptedAppTicket(void *a0, void *a1, int32_t a2, void *a3) { (void)a0; (void)a1; (void)a2; (void)a3; return false; }
 EXPORT int32_t SteamAPI_ISteamUser_GetGameBadgeLevel(void *a0, int32_t a1, bool a2) { (void)a0; (void)a1; (void)a2; return 0; }
@@ -695,10 +724,11 @@ EXPORT int32_t SteamAPI_ISteamUser_UserHasLicenseForApp(void *a0, uint64_t a1, u
 EXPORT bool SteamAPI_ISteamUtils_BOverlayNeedsPresent(void *a0) { (void)a0; return false; }
 EXPORT uint64_t SteamAPI_ISteamUtils_CheckFileSignature(void *a0, const char *a1) { (void)a0; (void)a1; return 0; }
 EXPORT bool SteamAPI_ISteamUtils_DismissFloatingGamepadTextInput(void *a0) { (void)a0; return false; }
+EXPORT bool SteamAPI_ISteamUtils_DismissGamepadTextInput(void *a0) { (void)a0; return false; }
 EXPORT int32_t SteamAPI_ISteamUtils_FilterText(void *a0, int32_t a1, uint64_t a2, const char *a3, void *a4, uint32_t a5) { (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; return 0; }
 EXPORT int32_t SteamAPI_ISteamUtils_GetAPICallFailureReason(void *a0, uint64_t a1) { (void)a0; (void)a1; return 0; }
 EXPORT bool SteamAPI_ISteamUtils_GetAPICallResult(void *a0, uint64_t a1, void *a2, int32_t a3, int32_t a4, void *a5) { (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; return false; }
-EXPORT uint32_t SteamAPI_ISteamUtils_GetAppID(void *a0) { (void)a0; return 620u; }
+EXPORT uint32_t SteamAPI_ISteamUtils_GetAppID(void *a0) { (void)a0; return 220u; }
 EXPORT int32_t SteamAPI_ISteamUtils_GetConnectedUniverse(void *a0) { (void)a0; return 1; }
 EXPORT uint8_t SteamAPI_ISteamUtils_GetCurrentBatteryPower(void *a0) { (void)a0; return 255; }
 EXPORT bool SteamAPI_ISteamUtils_GetEnteredGamepadTextInput(void *a0, void *a1, uint32_t a2) { (void)a0; (void)a1; (void)a2; return false; }
