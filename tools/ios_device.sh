@@ -53,6 +53,12 @@ data)
   for d in $FOLDERS; do
     [ -e "$GAME_ROOT/$d" ] && copy_to $APP_ID "$GAME_ROOT/$d" "Documents/game/$d"
   done
+  # Matériaux corrigés pour iOS (tools/ios_overrides.py), montés avant les VPK.
+  rm -rf build/ios/custom
+  python3 tools/ios_overrides.py build/ios/custom/ios
+  if [ -d build/ios/custom/ios ]; then
+    copy_to $APP_ID build/ios/custom/ios "Documents/game/$GAME/custom/ios"
+  fi
   ;;
 run)
   shift
