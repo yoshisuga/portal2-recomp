@@ -27,7 +27,7 @@ index a2c7edb3..05d13096 100644
  void APIENTRY_GL4ES gl4es_glEnableVertexArray(GLuint vaobj, GLenum array) {
      DBG(printf("glEnableVertexArray(%d, %s)\n", vaobj, PrintEnum(array));)
 diff --git a/src/gl/drawing.c b/src/gl/drawing.c
-index 498ecc5a..d670c95c 100644
+index 498ecc5a..08242e7c 100644
 --- a/src/gl/drawing.c
 +++ b/src/gl/drawing.c
 @@ -454,6 +454,7 @@ if(count>500000) return;
@@ -73,7 +73,7 @@ index 498ecc5a..d670c95c 100644
              GLuint old_index = wantBufferIndex(0);
              glDrawElementsCommon(mode, 0, count, 0, sindices, iindices, 1);
              if(iindices)
-@@ -1130,11 +1136,73 @@ void APIENTRY_GL4ES gl4es_glMultiDrawElementsBaseVertex( GLenum mode, GLsizei *c
+@@ -1130,11 +1136,78 @@ void APIENTRY_GL4ES gl4es_glMultiDrawElementsBaseVertex( GLenum mode, GLsizei *c
  AliasExport(void,glMultiDrawElementsBaseVertex,,( GLenum mode, GLsizei *count, GLenum type, const void * const *indices, GLsizei primcount, const GLint * basevertex));
  AliasExport(void,glMultiDrawElementsBaseVertex,ARB,( GLenum mode, GLsizei *count, GLenum type, const void * const *indices, GLsizei primcount, const GLint * basevertex));
  
@@ -129,6 +129,11 @@ index 498ecc5a..d670c95c 100644
 +    for(int i=0; i<hardext.maxvattrib; i++) {
 +        vertexattrib_t *w = &glstate->vao->vertexattrib[i];
 +        if(!w->enabled || w->divisor) continue;
++        // Flux qui se chevauche (pas plus petit qu'un élément) : valeur constante
++        // de togl pour une entrée absente, dans un petit tampon. Décalé, il lisait
++        // au-delà de ce tampon (des milliers de sommets plus loin) : attribut
++        // aléatoire, couleurs saturées selon l'exécution. Laissé en place.
++        if(w->stride < (w->size==GL_BGRA ? 4 : w->size)*gl_sizeof(w->type)) continue;
 +        intptr_t delta = (intptr_t)sign * basevertex * w->stride;
 +        w->real_pointer = (const char*)w->real_pointer + delta;
 +        w->pointer = (const char*)w->pointer + delta;
@@ -148,7 +153,7 @@ index 498ecc5a..d670c95c 100644
          count = adjust_vertices(mode, count);
         
          if (count<0) {
-@@ -1165,7 +1233,7 @@ void APIENTRY_GL4ES gl4es_glDrawElementsBaseVertex(GLenum mode, GLsizei count, G
+@@ -1165,7 +1238,7 @@ void APIENTRY_GL4ES gl4es_glDrawElementsBaseVertex(GLenum mode, GLsizei count, G
          GLushort *sindices = NULL;
          GLuint *iindices = NULL;
  
@@ -157,7 +162,7 @@ index 498ecc5a..d670c95c 100644
              iindices = copy_gl_array((glstate->vao->elements)?(void*)((char*)glstate->vao->elements->data + (uintptr_t)indices):indices,
                  type, 1, 0, GL_UNSIGNED_INT, 1, 0, count, NULL);
          else
-@@ -1230,6 +1298,9 @@ void APIENTRY_GL4ES gl4es_glDrawRangeElementsBaseVertex(GLenum mode, GLuint star
+@@ -1230,6 +1303,9 @@ void APIENTRY_GL4ES gl4es_glDrawRangeElementsBaseVertex(GLenum mode, GLuint star
      DBG(printf("glDrawRangeElementsBaseVertex(%s, %i, %i, %i, %s, @%p, %d), inlist=%i, pending=%d\n", PrintEnum(mode), start, end, count, PrintEnum(type), indices, basevertex, (glstate->list.active)?1:0, glstate->list.pending);)
      if(basevertex==0) {
          gl4es_glDrawRangeElements(mode, start, end, count, type, indices);
@@ -167,7 +172,7 @@ index 498ecc5a..d670c95c 100644
      } else {
          count = adjust_vertices(mode, count);
          
-@@ -1260,7 +1331,7 @@ void APIENTRY_GL4ES gl4es_glDrawRangeElementsBaseVertex(GLenum mode, GLuint star
+@@ -1260,7 +1336,7 @@ void APIENTRY_GL4ES gl4es_glDrawRangeElementsBaseVertex(GLenum mode, GLuint star
          noerrorShim();
          GLushort *sindices = NULL;
          GLuint *iindices = NULL;
@@ -547,10 +552,21 @@ index 25d2d742..46b8d3dc 100644
          #if 0
          pixel_thirdscale(pixels, &half, width, height, GL_RGBA, GL_UNSIGNED_BYTE);
 diff --git a/src/gl/texture_params.c b/src/gl/texture_params.c
-index 96e07205..7eade696 100644
+index 96e07205..c2a42961 100644
 --- a/src/gl/texture_params.c
 +++ b/src/gl/texture_params.c
-@@ -861,7 +861,7 @@ void realize_textures(int drawing) {
+@@ -205,6 +205,10 @@ void APIENTRY_GL4ES gl4es_glBindTexture(GLenum target, GLuint texture) {
+             case GL_TEXTURE_CUBE_MAP_NEGATIVE_Y:
+             case GL_TEXTURE_CUBE_MAP_POSITIVE_Z:
+             case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z:
++                // glActiveTexture n'est appliqué au pilote qu'au tracé : sans ceci, la
++                // cubemap allait sur l'unité active précédente (reflets lus dans la
++                // cubemap de normalisation d'un autre tracé, couleurs saturées).
++                realize_active();
+                 gles_glBindTexture(target, tex?tex->glname:0);
+                 break;
+             case GL_TEXTURE_1D:
+@@ -861,7 +865,7 @@ void realize_textures(int drawing) {
  #endif
      for (int i=0; i<glstate->bound_changed; i++) {
          // get highest priority texture unit

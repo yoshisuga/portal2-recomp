@@ -10,6 +10,7 @@
 #include <SDL_syswm.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <sys/stat.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
@@ -118,6 +119,72 @@ static void shader_source(GLuint shader, GLsizei count, const GLchar *const *str
     *at = 0;
     GLint type = 0; glGetShaderiv(shader, GL_SHADER_TYPE, &type);
     char *converted = rt_essl1_to_essl3(joined, type == GL_FRAGMENT_SHADER, rt_ios_srgb_enabled());
+    // P2_IOS_WHITE_COLOR=1 (essai) : couleur de sommet lue comme du blanc dans
+    // les shaders de fragments.
+    if (converted && type == GL_FRAGMENT_SHADER && getenv("P2_IOS_WHITE_COLOR")) {
+        const char *from = "_gl4es_FrontColor.", *to = "vec4(1.0).";
+        size_t n = 0;
+        for (const char *p = strstr(converted, from); p; p = strstr(p + 1, from)) ++n;
+        char *out = n ? malloc(strlen(converted) + n * strlen(to) + 1) : NULL, *w = out;
+        if (out) {
+            for (const char *p = converted, *q; (q = strstr(p, from)); p = q + strlen(from)) {
+                memcpy(w, p, (size_t)(q - p)); w += q - p;
+                strcpy(w, to); w += strlen(to);
+                if (!strstr(q + strlen(from), from)) { strcpy(w, q + strlen(from)); break; }
+            }
+            free(converted); converted = out;
+        }
+    }
+    // P2_IOS_DEBUG_ENV=1 : les shaders qui lisent une cubemap en unité 2 (reflets)
+    // affichent l'échantillon brut de la cubemap (valeur/2, pour voir au-delà de 1).
+    if (converted && type == GL_FRAGMENT_SHADER && getenv("P2_IOS_DEBUG_ENV") && strstr(converted, "uniform samplerCube sampler2;")) {
+        char *hit = strstr(converted, " = p2_texture(2,  sampler2,"), *line = hit;
+        while (line && line > converted && line[-1] != '\n') --line;
+        char *eol = hit ? strchr(hit, '\n') : NULL, *main_at = strstr(converted, "void p2_main()");
+        char *last = strrchr(converted, '}');
+        const char *output = strstr(converted, "out vec4 gl4es_FragColor;") ? "gl4es_FragColor" :
+                             strstr(converted, "gl4es_FragData[4];") ? "gl4es_FragData[0]" : NULL;
+        if (hit && eol && main_at && last && output && hit - line < 8 && main_at < line) {
+            char reg[8] = {0}; memcpy(reg, line, (size_t)(hit - line));
+            char *debug = malloc(strlen(converted) + 400);
+            if (debug) {
+                size_t a = (size_t)(main_at - converted), b = (size_t)(eol + 1 - converted), c = (size_t)(last - converted);
+                char *w = debug;
+                memcpy(w, converted, a); w += a;
+                w += sprintf(w, "vec4 p2_envdbg;\n");
+                memcpy(w, converted + a, b - a); w += b - a;
+                w += sprintf(w, "p2_envdbg = %s;\n", reg);
+                memcpy(w, converted + b, c - b); w += c - b;
+                sprintf(w, "%s = vec4(p2_envdbg.rgb * 0.5, 1.0) + 0.0001 * %s;\n}\n", output, output);
+                free(converted); converted = debug;
+            }
+        }
+    }
+    // P2_IOS_DEBUG_ID=1 : chaque shader de fragments s'affiche d'une couleur unie
+    // tirée de l'empreinte de son source (64 teintes, 4 niveaux par canal) ;
+    // source enregistré dans Documents/ids/<teinte>_<empreinte>.glsl.
+    if (converted && type == GL_FRAGMENT_SHADER && getenv("P2_IOS_DEBUG_ID") && strstr(converted, "in vec4 oT2;")) {
+        const char *output = strstr(converted, "out vec4 gl4es_FragColor;") ? "gl4es_FragColor" :
+                             strstr(converted, "gl4es_FragData[4];") ? "gl4es_FragData[0]" : NULL;
+        char *last = output ? strrchr(converted, '}') : NULL;
+        uint32_t hash = 2166136261u;
+        for (const char *p = joined; *p; ++p) hash = (hash ^ (uint8_t)*p) * 16777619u;
+        unsigned tint = hash % 64;
+        if (last && getenv("HOME")) {
+            char path[1024];
+            snprintf(path, sizeof(path), "%s/Documents/ids", getenv("HOME")); mkdir(path, 0755);
+            snprintf(path, sizeof(path), "%s/Documents/ids/%02u_%08x.glsl", getenv("HOME"), tint, hash);
+            FILE *f = fopen(path, "w"); if (f) { fputs(converted, f); fclose(f); }
+            size_t head = (size_t)(last - converted);
+            char *debug = malloc(strlen(converted) + 200);
+            if (debug) {
+                memcpy(debug, converted, head);
+                sprintf(debug + head, "%s = vec4(%.3f, %.3f, %.3f, 1.0) + 0.0001 * %s;\n}\n", output,
+                        ((tint >> 4) & 3) / 3.0, ((tint >> 2) & 3) / 3.0, (tint & 3) / 3.0, output);
+                free(converted); converted = debug;
+            }
+        }
+    }
     // P2_IOS_DEBUG_UV=1 : chaque shader de fragments qui reçoit oT0 affiche
     // fract(oT0.xy) (diagnostic des coordonnées de texture).
     if (converted && type == GL_FRAGMENT_SHADER && getenv("P2_IOS_DEBUG_UV") && strstr(converted, "in vec4 oT0;")) {
@@ -133,6 +200,12 @@ static void shader_source(GLuint shader, GLsizei count, const GLchar *const *str
                 free(converted); converted = debug;
             }
         }
+    }
+    // P2_IOS_NO_LIGHT4=1 (essai) : couleur de la 4e lumière (pc[20..22].w) lue à 0.
+    if (converted && type == GL_FRAGMENT_SHADER && getenv("P2_IOS_NO_LIGHT4")) {
+        static const char *reads[] = {"pc[20].w", "pc[21].w", "pc[22].w"};
+        for (int k = 0; k < 3; ++k)
+            for (char *at = strstr(converted, reads[k]); at; at = strstr(at, reads[k])) memcpy(at, "0.000000", 8), at += 8;
     }
     // P2_IOS_DEBUG_SPLIT=1 : les shaders de fragments à lightmap (unités 0, 1 et
     // 12) affichent en bandes verticales répétées tous les 600 pixels la texture
@@ -202,22 +275,43 @@ static GLint es3_internal(GLint internal, GLenum format, GLenum type) {
 }
 static void (*es_tex_image_2d)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void *);
 static void (*es_tex_sub_image_2d)(GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void *);
+static void half_stats(const char *what, GLsizei w, GLsizei h, GLenum f, GLenum ty, const void *d);
 static void es3_tex_image_2d(GLenum t, GLint l, GLint i, GLsizei w, GLsizei h, GLint b, GLenum f, GLenum ty, const void *d) {
     es_tex_image_2d(t, l, es3_internal(i, f, ty), w, h, b, f, es3_type(ty), d);
+    { const char *e = getenv("P2_IOS_GL_TRACE"); if (e && *e == '2') half_stats(t == GL_TEXTURE_2D ? "image" : "cube", w, h, f, ty, d); }
     static int all = -1;   // P2_IOS_GL_TRACE=2 : ce qu'OpenGL ES reçoit vraiment, niveau par niveau
     if (all < 0) { const char *e = getenv("P2_IOS_GL_TRACE"); all = e && *e == '2'; }
-    if (all && t == GL_TEXTURE_2D) {
-        GLint name = 0; real_get_integerv(GL_TEXTURE_BINDING_2D, &name);
+    if (all && (t == GL_TEXTURE_2D || (t >= 0x8515 && t <= 0x851A))) {   // 2D et faces de cubemap
+        GLint name = 0; real_get_integerv(t == GL_TEXTURE_2D ? GL_TEXTURE_BINDING_2D : 0x8514 /* BINDING_CUBE_MAP */, &name);
         const unsigned char *p = d;
-        fprintf(stderr, "[es-up] tex %d niveau %d interne %#x -> %#x %dx%d format %#x type %#x err %#x data %p %u,%u,%u,%u\n", name, l, i,
+        fprintf(stderr, "[es-up] cible %#x tex %d niveau %d interne %#x -> %#x %dx%d format %#x type %#x err %#x data %p %u,%u,%u,%u\n", t, name, l, i,
                 es3_internal(i, f, ty), w, h, f, es3_type(ty), glGetError(), d, p ? p[0] : 0, p ? p[1] : 0, p ? p[2] : 0, p ? p[3] : 0);
     }
 }
+// P2_IOS_GL_TRACE=2 : valeurs d'un envoi RGBA en demi-flottants (lightmaps HDR) :
+// maximum, part au-dessus de 1 et de 16, infinis et NaN, premier texel.
+static void half_stats(const char *what, GLsizei w, GLsizei h, GLenum f, GLenum ty, const void *d) {
+    if (!d || f != GL_RGBA || (ty != GL_HALF_FLOAT && ty != HALF_FLOAT_OES)) return;
+    const __fp16 *p = d;
+    size_t n = (size_t)w * h * 4, over1 = 0, over16 = 0, bad = 0;
+    float max = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if ((i & 3) == 3) continue;   // alpha
+        float v = (float)p[i];
+        if (v != v || __builtin_isinf(v)) { ++bad; continue; }
+        if (v > max) max = v;
+        over1 += v > 1, over16 += v > 16;
+    }
+    fprintf(stderr, "[half] %s %dx%d max %.3g >1 %zu >16 %zu inf/nan %zu sur %zu, texel0 %.3g %.3g %.3g %.3g\n", what, w, h,
+            max, over1, over16, bad, n / 4 * 3, (float)p[0], (float)p[1], (float)p[2], (float)p[3]);
+}
 static void es3_tex_sub_image_2d(GLenum t, GLint l, GLint x, GLint y, GLsizei w, GLsizei h, GLenum f, GLenum ty, const void *d) {
     es_tex_sub_image_2d(t, l, x, y, w, h, f, es3_type(ty), d);
+    { const char *e = getenv("P2_IOS_GL_TRACE"); if (e && *e == '2') half_stats("sub", w, h, f, ty, d); }
     { const char *e = getenv("P2_IOS_GL_TRACE"); if (e && *e == '2' && t == GL_TEXTURE_2D) {
         GLint name = 0; real_get_integerv(GL_TEXTURE_BINDING_2D, &name);
-        fprintf(stderr, "[es-sub] tex %d niveau %d %dx%d+%d+%d data %p\n", name, l, w, h, x, y, d); } }
+        fprintf(stderr, "[es-sub] tex %d niveau %d %dx%d+%d+%d format %#x type %#x err %#x data %p\n", name, l, w, h, x, y,
+                f, es3_type(ty), glGetError(), d); } }
 }
 // Écriture sans synchronisation (runtime/gl.c, stream_subdata) : le pilote ES
 // d'Apple attend que le GPU ait fini avec le tampon avant un glBufferSubData
@@ -266,7 +360,44 @@ void gl4es_p2_bgra_mask(GLuint program, unsigned mask) {
     e->value = mask;
     es_uniform1i(e->location, (GLint)mask);   // programme courant : celui du dessin
 }
+// P2_IOS_UNIFORM_TRACE=1 (ou =N, seuil) : envois glUniform4fv contenant une valeur
+// hors de ±64 (ou ±N ; NaN/infini), avec l'indice dans pc[]/vc[] du programme courant
+// (constantes absurdes : voir vector_constant_copy, runtime/shims.c).
+static void (*es_uniform4fv)(GLint, GLsizei, const GLfloat *);
+static void uniform4fv_traced(GLint location, GLsizei count, const GLfloat *v) {
+    es_uniform4fv(location, count, v);
+    static int reported;
+    if (reported > 3000 || !v) return;
+    static GLint (*location_of)(GLuint, const GLchar *);
+    if (!location_of) location_of = dlsym(gles, "glGetUniformLocation");
+    for (GLsizei i = 0; i < count; ++i) {
+        int odd = 0;
+        static float limit;
+        if (!limit) { limit = (float)atof(getenv("P2_IOS_UNIFORM_TRACE")); if (limit <= 1) limit = 64; }
+        for (int c = 0; c < 4; ++c) { float x = v[i * 4 + c]; odd |= x != x || x > limit || x < -limit; }
+        if (!odd) continue;
+        GLint program = 0; real_get_integerv(0x8B8D /* CURRENT_PROGRAM */, &program);
+        GLint pc = location_of(program, "pc"), vc = location_of(program, "vc"), at = location + i;
+        int in_pc = pc >= 0 && at >= pc && (vc < pc || at < vc || vc < 0);
+        {   // une fois par (registre, valeurs)
+            static struct { int pc, index; float v[4]; } seen[2048]; static int nseen;
+            int index = in_pc ? at - pc : at - vc, known = 0;
+            for (int k = 0; k < nseen && !known; ++k)
+                known = seen[k].pc == in_pc && seen[k].index == index && !memcmp(seen[k].v, v + i * 4, 16);
+            if (known) continue;
+            if (nseen < 2048) { seen[nseen].pc = in_pc; seen[nseen].index = index; memcpy(seen[nseen].v, v + i * 4, 16); ++nseen; }
+        }
+        fprintf(stderr, "[uniform] programme %d emplacement %d (%s[%d]) : %g %g %g %g\n", program, at,
+                in_pc ? "pc" : vc >= 0 && at >= vc ? "vc" : "?", in_pc ? at - pc : vc >= 0 && at >= vc ? at - vc : at,
+                v[i * 4], v[i * 4 + 1], v[i * 4 + 2], v[i * 4 + 3]);
+        if (++reported > 3000) return;
+    }
+}
 static void *gles_function(const char *name) {
+    if (!strcmp(name, "glUniform4fv") && getenv("P2_IOS_UNIFORM_TRACE")) {
+        es_uniform4fv = dlsym(gles, name);
+        return (void *)uniform4fv_traced;
+    }
     if (!strcmp(name, "glBufferSubData")) {
         es_buffer_sub_data = dlsym(gles, name);
         es_map_buffer_range = dlsym(gles, "glMapBufferRange");
@@ -506,9 +637,14 @@ static void trace_upload(const char *fn, GLenum target, GLint level, GLenum inte
         if (seen[i].fn == fn && seen[i].target == target && seen[i].internal == internal && seen[i].format == format &&
             seen[i].type == type && seen[i].level == (level > 0) && seen[i].data == (data != NULL) && !e) return;
     if (count < 256) seen[count++] = (typeof(seen[0])){fn, target, internal, format, type, level > 0, data != NULL};
-    GLint unpack = 0; gl4es_get_integerv(0x88EF /* PIXEL_UNPACK_BUFFER_BINDING */, &unpack);
-    fprintf(stderr, "[gl-trace] %s cible %#x niveau %d interne %#x %dx%d format %#x type %#x données %p PBO %d -> erreur %#x\n",
-            fn, target, level, internal, w, h, format, type, data, unpack, e);
+    GLint unpack = 0, length = 0, skip_rows = 0, skip_pixels = 0;
+    gl4es_get_integerv(0x88EF /* PIXEL_UNPACK_BUFFER_BINDING */, &unpack);
+    gl4es_get_integerv(GL_UNPACK_ROW_LENGTH, &length);
+    gl4es_get_integerv(GL_UNPACK_SKIP_ROWS, &skip_rows);
+    gl4es_get_integerv(GL_UNPACK_SKIP_PIXELS, &skip_pixels);
+    fprintf(stderr, "[gl-trace] %s cible %#x niveau %d interne %#x %dx%d format %#x type %#x données %p PBO %d "
+            "ligne %d saut %d,%d -> erreur %#x\n", fn, target, level, internal, w, h, format, type, data, unpack,
+            length, skip_pixels, skip_rows, e);
 }
 static void clear_errors(void) {
     GLenum (*error)(void) = gl4es_GetProcAddress("glGetError");
@@ -652,15 +788,46 @@ static int channels(GLenum format) {
     default: return 0;
     }
 }
+// Disposition des pixels source selon l'état UNPACK : un rectangle partiel
+// (lightmap retouchée par une lumière dynamique : flash des scanners) est lu
+// dans la page entière via ROW_LENGTH et SKIP_ROWS/SKIP_PIXELS. Les données
+// converties sont serrées : unpack_packed() neutralise cet état le temps de
+// l'envoi, unpack_restore() le remet.
+typedef struct { GLint alignment, row_length, skip_rows, skip_pixels; } Unpack;
+static Unpack unpack_state(void) {
+    Unpack u = {4, 0, 0, 0};
+    gl4es_get_integerv(GL_UNPACK_ALIGNMENT, &u.alignment);
+    gl4es_get_integerv(GL_UNPACK_ROW_LENGTH, &u.row_length);
+    gl4es_get_integerv(GL_UNPACK_SKIP_ROWS, &u.skip_rows);
+    gl4es_get_integerv(GL_UNPACK_SKIP_PIXELS, &u.skip_pixels);
+    if (u.alignment < 1) u.alignment = 1;
+    return u;
+}
+// Premier texel de la ligne y (texels de n canaux de 16 bits).
+static const unsigned short *unpack_row(const void *data, const Unpack *u, GLsizei w, int n, GLsizei y) {
+    size_t length = u->row_length > 0 ? (size_t)u->row_length : (size_t)w;
+    size_t row = length * n * 2, stride = (row + (size_t)u->alignment - 1) / (size_t)u->alignment * (size_t)u->alignment;
+    return (const unsigned short *)((const unsigned char *)data + (size_t)(u->skip_rows + y) * stride) + (size_t)u->skip_pixels * n;
+}
+static void unpack_packed(GLint alignment) {
+    g4_pixel_storei(GL_UNPACK_ALIGNMENT, alignment);
+    g4_pixel_storei(GL_UNPACK_ROW_LENGTH, 0);
+    g4_pixel_storei(GL_UNPACK_SKIP_ROWS, 0);
+    g4_pixel_storei(GL_UNPACK_SKIP_PIXELS, 0);
+}
+static void unpack_restore(const Unpack *u) {
+    g4_pixel_storei(GL_UNPACK_ALIGNMENT, u->alignment);
+    g4_pixel_storei(GL_UNPACK_ROW_LENGTH, u->row_length);
+    g4_pixel_storei(GL_UNPACK_SKIP_ROWS, u->skip_rows);
+    g4_pixel_storei(GL_UNPACK_SKIP_PIXELS, u->skip_pixels);
+}
 static unsigned char *narrow_u16(const void *data, GLsizei w, GLsizei h, int n) {
     if (!data || w <= 0 || h <= 0) return NULL;
-    GLint alignment = 4; gl4es_get_integerv(GL_UNPACK_ALIGNMENT, &alignment);
-    if (alignment < 1) alignment = 1;
-    size_t row = (size_t)w * n * 2, stride = (row + (size_t)alignment - 1) / (size_t)alignment * (size_t)alignment;
+    Unpack u = unpack_state();
     unsigned char *out = malloc((size_t)w * h * n);
     if (!out) return NULL;
     for (GLsizei y = 0; y < h; ++y) {
-        const unsigned short *src = (const unsigned short *)((const unsigned char *)data + (size_t)y * stride);
+        const unsigned short *src = unpack_row(data, &u, w, n, y);
         unsigned char *dst = out + (size_t)y * w * n;
         for (size_t i = 0; i < (size_t)w * n; ++i) dst[i] = (unsigned char)(src[i] >> 8);
     }
@@ -669,15 +836,13 @@ static unsigned char *narrow_u16(const void *data, GLsizei w, GLsizei h, int n) 
 // v / 65535 en demi-flottant, BGRA remis en RGBA (format à passer : *format).
 static unsigned short *half_u16(const void *data, GLsizei w, GLsizei h, int n, GLenum *format) {
     if (!data || w <= 0 || h <= 0) return NULL;
-    GLint alignment = 4; gl4es_get_integerv(GL_UNPACK_ALIGNMENT, &alignment);
-    if (alignment < 1) alignment = 1;
-    size_t row = (size_t)w * n * 2, stride = (row + (size_t)alignment - 1) / (size_t)alignment * (size_t)alignment;
+    Unpack u = unpack_state();
     __fp16 *out = malloc((size_t)w * h * n * sizeof(*out));
     if (!out) return NULL;
     int swap = *format == 0x80E1 /* BGRA */ || *format == 0x80E0 /* BGR */;
     if (swap) *format = *format == 0x80E1 ? GL_RGBA : GL_RGB;
     for (GLsizei y = 0; y < h; ++y) {
-        const unsigned short *src = (const unsigned short *)((const unsigned char *)data + (size_t)y * stride);
+        const unsigned short *src = unpack_row(data, &u, w, n, y);
         __fp16 *dst = out + (size_t)y * w * n;
         for (GLsizei x = 0; x < w; ++x)
             for (int c = 0; c < n; ++c) {
@@ -748,18 +913,18 @@ static void tex_image_2d(GLenum t, GLint l, GLint i, GLsizei w, GLsizei h, GLint
     if (ty != GL_UNSIGNED_SHORT || !n) { g4_tex_image_2d_plain(t, l, i, w, h, b, f, ty, d); free(zeros); return; }
     if (half) {
         unsigned short *data = half_u16(d, w, h, n, &f);
-        GLint alignment = 4; gl4es_get_integerv(GL_UNPACK_ALIGNMENT, &alignment);
-        g4_pixel_storei(GL_UNPACK_ALIGNMENT, 2);
+        Unpack u = unpack_state();
+        unpack_packed(2);
         g4_tex_image_2d_plain(t, l, half, w, h, b, f, GL_HALF_FLOAT, d ? data : NULL);
-        g4_pixel_storei(GL_UNPACK_ALIGNMENT, alignment);
+        unpack_restore(&u);
         free(data);
         return;
     }
     unsigned char *narrow = narrow_u16(d, w, h, n);
-    GLint alignment = 4; gl4es_get_integerv(GL_UNPACK_ALIGNMENT, &alignment);
-    g4_pixel_storei(GL_UNPACK_ALIGNMENT, 1);
+    Unpack u = unpack_state();
+    unpack_packed(1);
     g4_tex_image_2d_plain(t, l, narrow_internal(i), w, h, b, f, GL_UNSIGNED_BYTE, d ? narrow : NULL);
-    g4_pixel_storei(GL_UNPACK_ALIGNMENT, alignment);
+    unpack_restore(&u);
     free(narrow);
 }
 static void tex_sub_image_2d(GLenum t, GLint l, GLint x, GLint y, GLsizei w, GLsizei h, GLenum f, GLenum ty, const void *d) {
@@ -770,19 +935,19 @@ static void tex_sub_image_2d(GLenum t, GLint l, GLint x, GLint y, GLsizei w, GLs
     if (texture && texture < half_size && half_textures[texture]) {
         unsigned short *data = half_u16(d, w, h, n, &f);
         if (!data) return;
-        GLint alignment = 4; gl4es_get_integerv(GL_UNPACK_ALIGNMENT, &alignment);
-        g4_pixel_storei(GL_UNPACK_ALIGNMENT, 2);
+        Unpack u = unpack_state();
+        unpack_packed(2);
         g4_tex_sub_image_2d_plain(t, l, x, y, w, h, f, GL_HALF_FLOAT, data);
-        g4_pixel_storei(GL_UNPACK_ALIGNMENT, alignment);
+        unpack_restore(&u);
         free(data);
         return;
     }
     unsigned char *narrow = narrow_u16(d, w, h, n);
     if (!narrow) return;
-    GLint alignment = 4; gl4es_get_integerv(GL_UNPACK_ALIGNMENT, &alignment);
-    g4_pixel_storei(GL_UNPACK_ALIGNMENT, 1);
+    Unpack u = unpack_state();
+    unpack_packed(1);
     g4_tex_sub_image_2d_plain(t, l, x, y, w, h, f, GL_UNSIGNED_BYTE, narrow);
-    g4_pixel_storei(GL_UNPACK_ALIGNMENT, alignment);
+    unpack_restore(&u);
     free(narrow);
 }
 
@@ -918,6 +1083,38 @@ static void probe_frame(void) {
             p[3][0], p[3][1], p[3][2], p[4][0], p[4][1], p[4][2]);
 }
 
+// P2_IOS_SNAPSHOT=1 : toutes les 600 images, l'image présentée dans
+// Documents/snap_<n>.ppm (n de 0 à 9, en boucle) : pour voir l'écran sans
+// capture faite à la main.
+static void snapshot(void) {
+    static int enabled = -1, frame, index;
+    if (enabled < 0) enabled = getenv("P2_IOS_SNAPSHOT") != NULL;
+    if (!enabled || ++frame % 600 || drawable_width <= 0 || !getenv("HOME")) return;
+    void (*read)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void *) = dlsym(gles, "glReadPixels");
+    int w = drawable_width, h = drawable_height;
+    unsigned char *rgba = malloc((size_t)w * h * 4);
+    if (!rgba) return;
+    GLint bound = 0; real_get_integerv(GL_FRAMEBUFFER_BINDING, &bound);
+    real_bind_framebuffer(GL_FRAMEBUFFER, system_framebuffer);
+    read(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    real_bind_framebuffer(GL_FRAMEBUFFER, (GLuint)bound);
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/Documents/snap_%d.ppm", getenv("HOME"), index);
+    index = (index + 1) % 10;
+    FILE *f = fopen(path, "wb");
+    if (f) {
+        fprintf(f, "P6\n%d %d\n255\n", w, h);
+        unsigned char *row = malloc((size_t)w * 3);
+        for (int y = h - 1; row && y >= 0; --y) {
+            for (int x = 0; x < w; ++x) memcpy(row + x * 3, rgba + ((size_t)y * w + x) * 4, 3);
+            fwrite(row, 3, (size_t)w, f);
+        }
+        free(row); fclose(f);
+        fprintf(stderr, "[gl-ios] image %d enregistrée : %s\n", frame, path);
+    }
+    free(rgba);
+}
+
 void rt_ios_draws_frame_end(void);
 unsigned long rt_ios_frames;   // images présentées (compteur affiché par touch_controls.m)
 void rt_ios_gl_swap_window(SDL_Window *window) {
@@ -925,6 +1122,7 @@ void rt_ios_gl_swap_window(SDL_Window *window) {
     rt_ios_draws_frame_end();
     gl4es_pre_swap();
     probe_frame();
+    snapshot();
     // SDL présente le renderbuffer lié à GL_RENDERBUFFER en supposant que c'est
     // le sien ; le jeu y laisse souvent un renderbuffer de profondeur (image noire).
     static void (*bind_rb)(GLenum, GLuint);

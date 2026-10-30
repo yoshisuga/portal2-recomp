@@ -116,9 +116,10 @@ int main(int argc, char **argv) {
             count += 2;
         }
     }
-    // Échelle de rendu choisie (Réglages ou P2_IOS_RENDER_SCALE) : la
-    // résolution du jeu suit, sinon video.txt garderait l'ancienne.
-    if (getenv("P2_IOS_RENDER_SCALE") && count + 4 < 256) {
+    // Résolution du jeu : toujours celle de l'écran à l'échelle de rendu, sinon
+    // la configuration enregistrée (video.txt, videoconfig_linux.cfg) garde une
+    // taille passée (Half-Life 2 : 1356×932 au lieu de 1902×1338, image floue).
+    if (count + 4 < 256) {
         int present = 0;
         for (int i = 1; i < count; ++i) present |= !strcmp(arguments[i], "-w") || !strcmp(arguments[i], "-width");
         int w = 0, h = 0;
@@ -127,7 +128,7 @@ int main(int argc, char **argv) {
             char value[16];
             push("-w"); snprintf(value, sizeof(value), "%d", w); push(value);
             push("-h"); snprintf(value, sizeof(value), "%d", h); push(value);
-            fprintf(stderr, "[ios] résolution %dx%d (échelle %s)\n", w, h, getenv("P2_IOS_RENDER_SCALE"));
+            fprintf(stderr, "[ios] résolution %dx%d\n", w, h);
         }
     }
     arguments[count] = NULL;

@@ -3,6 +3,7 @@
 #if TARGET_OS_IPHONE
 #import <UIKit/UIKit.h>
 #include <SDL.h>
+#include <SDL_syswm.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -62,9 +63,26 @@ SDL_Window *rt_ios_create_window(const char *title, int x, int y, int w, int h, 
     rt_ios_touch_controls_attach(window);   // commandes tactiles (touch_controls.m)
     return window;
 }
+// Taille actuelle de la vue SDL, en points. Au retour d'arrière-plan, iOS
+// dispose un instant la vue en portrait (669×951 au lieu de 951×669) : SDL
+// envoie ce redimensionnement, que le jeu lit une fois la vue revenue en
+// paysage, et ne rendait plus que 1338 des 1902 pixels de large. SDL garde
+// aussi cette taille passée (SDL_GetWindowSize) : on lit la vue.
+static int view_size(SDL_Window *window, int *w, int *h) {
+    SDL_SysWMinfo info;
+    SDL_VERSION(&info.version);
+    if (!window || !SDL_GetWindowWMInfo(window, &info) || info.subsystem != SDL_SYSWM_UIKIT) return 0;
+    UIView *view = info.info.uikit.window.rootViewController.view;
+    __block CGSize size = CGSizeZero;
+    if ([NSThread isMainThread]) size = view.bounds.size;
+    else dispatch_sync(dispatch_get_main_queue(), ^{ size = view.bounds.size; });
+    if (size.width < 1 || size.height < 1) return 0;
+    *w = (int)size.width, *h = (int)size.height;
+    return 1;
+}
 void rt_ios_get_window_size(SDL_Window *window, int *w, int *h) {
     int pw = 0, ph = 0;
-    SDL_GetWindowSize(window, &pw, &ph);
+    if (!view_size(window, &pw, &ph)) SDL_GetWindowSize(window, &pw, &ph);
     if (w) *w = up(pw);
     if (h) *h = up(ph);
 }
@@ -133,11 +151,50 @@ static int poll_paced(SDL_Event *event) {
     }
 }
 
+// Événements de fenêtre et d'application (rares) : journal de la taille de la
+// vue, de son échelle et du drawable, pour le retour d'arrière-plan.
+// P2_IOS_WINDOW_TRACE=1.
+static void trace_window_event(const SDL_Event *e) {
+    static int enabled = -1;
+    if (enabled < 0) enabled = getenv("P2_IOS_WINDOW_TRACE") != NULL;
+    if (!enabled) return;
+    const char *name = NULL;
+    switch (e->type) {
+    case SDL_APP_WILLENTERBACKGROUND: name = "app-will-bg"; break;
+    case SDL_APP_DIDENTERBACKGROUND: name = "app-did-bg"; break;
+    case SDL_APP_WILLENTERFOREGROUND: name = "app-will-fg"; break;
+    case SDL_APP_DIDENTERFOREGROUND: name = "app-did-fg"; break;
+    case SDL_WINDOWEVENT: name = "window"; break;
+    default: return;
+    }
+    SDL_Window *window = SDL_GetWindowFromID(e->type == SDL_WINDOWEVENT ? e->window.windowID : 1);
+    int dw = 0, dh = 0;
+    CGSize bounds = CGSizeZero, screen = rt_ios_screen().bounds.size;
+    CGFloat scale = 0;
+    SDL_SysWMinfo info;
+    SDL_VERSION(&info.version);
+    if (window) {
+        SDL_GL_GetDrawableSize(window, &dw, &dh);
+        if (SDL_GetWindowWMInfo(window, &info) && info.subsystem == SDL_SYSWM_UIKIT) {
+            UIView *view = info.info.uikit.window.rootViewController.view;
+            bounds = view.bounds.size, scale = view.contentScaleFactor;
+        }
+    }
+    fprintf(stderr, "[sdl-ios] %s %d (%d, %d) : vue %.0fx%.0f ×%.2f, drawable %dx%d, écran %.0fx%.0f\n", name,
+            e->type == SDL_WINDOWEVENT ? e->window.event : 0, e->type == SDL_WINDOWEVENT ? e->window.data1 : 0,
+            e->type == SDL_WINDOWEVENT ? e->window.data2 : 0, bounds.width, bounds.height, scale, dw, dh,
+            screen.width, screen.height);
+}
+
 // Positions absolues et tailles de fenêtre en pixels ; les déplacements
 // relatifs (visée) gardent leur échelle, pour ne pas tripler la sensibilité.
 int rt_ios_poll_event(SDL_Event *event) {
     rt_ios_game_state_poll();   // menus/chargement ou partie (game_state.c), pour les commandes tactiles
     int got = poll_paced(event);
+    if (got && event) trace_window_event(event);
+    if (got && event && event->type == SDL_WINDOWEVENT &&
+        (event->window.event == SDL_WINDOWEVENT_RESIZED || event->window.event == SDL_WINDOWEVENT_SIZE_CHANGED))
+        view_size(SDL_GetWindowFromID(event->window.windowID), &event->window.data1, &event->window.data2);
     if (!got || !event || rt_ios_render_scale() <= 1) return got;
     switch (event->type) {
     case SDL_MOUSEMOTION: event->motion.x = up(event->motion.x); event->motion.y = up(event->motion.y); break;

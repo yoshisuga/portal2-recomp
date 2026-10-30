@@ -42,7 +42,11 @@ static int ident_char(int c) { return isalnum(c) || c == '_'; }
 
 // Identifiants renommés (mot entier). Les deux tableaux dépendent du stade.
 typedef struct { const char *from, *to; } Rename;
+// lowp/mediump (gl4es : couleurs de sommet _gl4es_FrontColor en lowp) : sur
+// les GPU d'Apple, demi-flottants ; les shaders de Source y font passer plus
+// que des couleurs (et des valeurs au-delà de 1) : tout en highp.
 static const Rename common[] = {
+    {"lowp", "highp"}, {"mediump", "highp"},
     {"texture2D", "texture"}, {"texture2DProj", "textureProj"}, {"texture2DLod", "textureLod"},
     {"texture2DLodEXT", "textureLod"}, {"texture2DProjLod", "textureProjLod"}, {"texture2DProjLodEXT", "textureProjLod"},
     {"texture2DGradEXT", "textureGrad"}, {"textureCube", "texture"}, {"textureCubeLod", "textureLod"},
@@ -263,6 +267,34 @@ static char *initialize_unwritten_outputs(char *shader) {
     return out.data;
 }
 
+// Couleurs de sommet (oD0/oD1 de Direct3D, gl_FrontColor/gl_FrontSecondaryColor
+// d'OpenGL de bureau) : bornées à [0, 1] par le matériel, ce dont dépendent les
+// shaders de Source (éclairage par sommet au-delà de 1). gl4es en fait des
+// sorties ordinaires, non bornées : surfaces saturées, canal par canal, en
+// couleurs criardes. main devient p2_vmain, suivie des bornes.
+static char *clamp_vertex_colors(char *shader) {
+    static const char *names[] = {"_gl4es_FrontColor", "_gl4es_FrontSecondaryColor", "_gl4es_BackColor",
+                                  "_gl4es_BackSecondaryColor"};
+    Buffer tail = {0};
+    for (size_t i = 0; i < sizeof(names) / sizeof(*names); ++i) {
+        if (!uses(shader, names[i])) continue;
+        char line[128];
+        snprintf(line, sizeof(line), "    %s = clamp(%s, 0.0, 1.0);\n", names[i], names[i]);
+        if (puts_(&tail, line)) { free(tail.data); return shader; }
+    }
+    if (!tail.data) return shader;
+    char *entry = !strncmp(shader, "void main", 9) ? shader : strstr(shader, "\nvoid main");
+    if (!entry) { free(tail.data); return shader; }
+    if (*entry == '\n') ++entry;
+    Buffer out = {0};
+    if (put(&out, shader, (size_t)(entry - shader)) || puts_(&out, "void p2_vmain") || puts_(&out, entry + 9) ||
+        puts_(&out, "\nvoid main() {\n    p2_vmain();\n") || puts_(&out, tail.data) || puts_(&out, "}\n")) {
+        free(tail.data); free(out.data); return shader;
+    }
+    free(tail.data); free(shader);
+    return out.data;
+}
+
 char *rt_essl1_to_essl3(const char *source, int is_fragment, int emulate) {
     const char *p = source;
     while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') ++p;
@@ -359,7 +391,7 @@ char *rt_essl1_to_essl3(const char *source, int is_fragment, int emulate) {
         }
         if (puts_(&out, "}\n")) goto fail;
     }
-    if (!is_fragment) out.data = initialize_unwritten_outputs(out.data);
+    if (!is_fragment) out.data = clamp_vertex_colors(initialize_unwritten_outputs(out.data));
     if (!is_fragment && !(getenv("P2_IOS_BGRA") && !strcmp(getenv("P2_IOS_BGRA"), "0"))) return bgra_attributes(out.data);
     return out.data;
 fail:

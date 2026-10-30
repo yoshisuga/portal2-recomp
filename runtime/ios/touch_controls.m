@@ -572,7 +572,8 @@ static void backtap_touch(NSSet<UITouch *> *touches) {
 - (CGFloat)stickRadius { return MIN(66, self.area.size.height * .15); }
 - (CGPoint)restingStick:(BOOL)right {
     CGRect a = self.area;
-    return CGPointMake(CGRectGetMinX(a) + a.size.width * (right ? .80 : .16), CGRectGetMinY(a) + a.size.height * .72);
+    // Droite : à gauche de l'éventail de boutons (arc, plus bas).
+    return CGPointMake(CGRectGetMinX(a) + a.size.width * (right ? .56 : .16), CGRectGetMinY(a) + a.size.height * .72);
 }
 static BOOL portal_buttons(void) {
     const char *e = getenv("P2_PORTAL_BUTTONS");
@@ -580,31 +581,37 @@ static BOOL portal_buttons(void) {
     if (e && *e == '0') return NO;
     return !backtap_on;
 }
+// Boutons du pouce droit en éventail autour du bouton principal, dans le coin
+// bas droit : anneau intérieur (utiliser, saut, accroupi, second bouton) puis
+// anneau extérieur (armes), tous à portée sans lâcher la visée.
+static CGPoint arc(CGPoint center, CGFloat radius, CGFloat degrees) {
+    CGFloat t = degrees * (CGFloat)M_PI / 180;
+    return CGPointMake(center.x + radius * cos(t), center.y - radius * sin(t));
+}
 - (int)buttons:(Button *)b {
-    CGRect a = self.area; CGFloat x = CGRectGetMinX(a), y = CGRectGetMinY(a), w = a.size.width, h = a.size.height;
+    CGRect a = self.area; CGFloat x = CGRectGetMinX(a), y = CGRectGetMinY(a), w = a.size.width;
     UIColor *blue = [UIColor colorWithRed:.16 green:.55 blue:1 alpha:.6], *orange = [UIColor colorWithRed:1 green:.55 blue:.05 alpha:.6];
     UIColor *ink = [UIColor colorWithWhite:0 alpha:.35];   // fond sombre : icônes lisibles sur un mur clair
-    // Portails sous le bouton « utiliser » (E, à 80 % de la hauteur), sans
-    // sortir de la zone sûre sur un écran bas : orange dessous, bleu à sa gauche.
-    CGFloat use = y + h * .80, gap = kPortalSize * 1.15;
-    CGFloat fire = MIN(use + (kButtonSize + kPortalSize) / 2 + 6, y + h - kPortalSize * .55);
+    CGFloat main = kPortalSize * 1.1;
+    CGPoint corner = CGPointMake(CGRectGetMaxX(a) - main * .5 - 14, CGRectGetMaxY(a) - main * .5 - 16);
+    CGFloat inner = main * .5 + kButtonSize * .5 + 46, outer = inner + kButtonSize + 26;
     CGFloat toggles = CGRectGetMaxY([self fpsCorner]) + kButtonSize * .45 + 4;
 #if RT_GAME_HL2
-    // Half-Life 2 : tir principal (grand, rouge) sous « utiliser », tir secondaire
-    // à sa gauche ; rechargement, arme suivante et précédente au-dessus du pouce
-    // droit ; sprint au-dessus du stick ; lampe torche à gauche de la pause.
+    // Half-Life 2 : tir principal (grand, rouge) dans le coin, tir secondaire au
+    // bout de l'anneau intérieur ; rechargement et armes sur l'anneau extérieur ;
+    // sprint au-dessus du stick ; lampe torche à gauche de la pause.
     (void)blue; (void)orange;
     UIColor *red = [UIColor colorWithRed:.85 green:.18 blue:.12 alpha:.6];
     Button all[] = {
-        {MOUSE_LEFT, @"scope", red, {x + w * .94, fire}, kPortalSize},
-        {MOUSE_RIGHT, @"circle.circle", ink, {x + w * .94 - gap, fire}, kButtonSize},
-        {KEY_SPACE, @"arrow.up", ink, {x + w * .94, y + h * .50}, kButtonSize},
-        {KEY_CTRL, @"arrow.down", ink, {x + w * .80, y + h * .40}, kButtonSize},
-        {KEY_E, @"hand.point.up.left.fill", ink, {x + w * .94, use}, kButtonSize},
-        {KEY_R, @"arrow.clockwise", ink, {x + w * .80, y + h * .62}, kButtonSize * .85},
-        {WHEEL_NEXT, @"chevron.forward.2", ink, {x + w * .94, y + h * .30}, kButtonSize * .85},
-        {KEY_Q, @"arrow.uturn.backward", ink, {x + w * .80, y + h * .20}, kButtonSize * .75},
-        {KEY_SHIFT, @"figure.run", ink, {x + w * .06, y + h * .40}, kButtonSize * .85},
+        {MOUSE_LEFT, @"scope", red, corner, main},
+        {KEY_E, @"hand.point.up.left.fill", ink, arc(corner, inner, 90), kButtonSize},
+        {KEY_SPACE, @"arrow.up", ink, arc(corner, inner, 123), kButtonSize},
+        {KEY_CTRL, @"arrow.down", ink, arc(corner, inner, 156), kButtonSize},
+        {MOUSE_RIGHT, @"circle.circle", ink, arc(corner, inner, 189), kButtonSize},
+        {KEY_R, @"arrow.clockwise", ink, arc(corner, outer, 100), kButtonSize * .85},
+        {WHEEL_NEXT, @"chevron.forward.2", ink, arc(corner, outer, 124), kButtonSize * .85},
+        {KEY_Q, @"arrow.uturn.backward", ink, arc(corner, outer, 147), kButtonSize * .75},
+        {KEY_SHIFT, @"figure.run", ink, {x + w * .06, y + a.size.height * .40}, kButtonSize * .85},
         {KEY_F, @"flashlight.on.fill", ink, {x + w - kButtonSize * 1.35, y + kButtonSize * .45}, kButtonSize * .75},
         {KEY_ESCAPE, @"pause.fill", ink, {x + w - kButtonSize * .45, y + kButtonSize * .45}, kButtonSize * .75},
         {LOOK_MODE, trackpad ? @"hand.draw.fill" : @"r.joystick.fill", ink,
@@ -613,11 +620,13 @@ static BOOL portal_buttons(void) {
          {x + kButtonSize * 1.3, toggles}, kButtonSize * .75},
     };
 #else
+    // Portal 2 : portail orange dans le coin, bleu au bout de l'anneau intérieur.
     Button all[] = {
-        {MOUSE_LEFT, nil, blue, {x + w * .94 - gap, fire}, kPortalSize}, {MOUSE_RIGHT, nil, orange, {x + w * .94, fire}, kPortalSize},
-        {KEY_SPACE, @"arrow.up", ink, {x + w * .94, y + h * .50}, kButtonSize},
-        {KEY_CTRL, @"arrow.down", ink, {x + w * .80, y + h * .40}, kButtonSize},
-        {KEY_E, @"hand.point.up.left.fill", ink, {x + w * .94, use}, kButtonSize},
+        {MOUSE_RIGHT, nil, orange, corner, main},
+        {KEY_E, @"hand.point.up.left.fill", ink, arc(corner, inner, 90), kButtonSize},
+        {KEY_SPACE, @"arrow.up", ink, arc(corner, inner, 123), kButtonSize},
+        {KEY_CTRL, @"arrow.down", ink, arc(corner, inner, 156), kButtonSize},
+        {MOUSE_LEFT, nil, blue, arc(corner, inner, 189), kPortalSize},
         {KEY_ESCAPE, @"pause.fill", ink, {x + w - kButtonSize * .45, y + kButtonSize * .45}, kButtonSize * .75},
         // Mode de la caméra, en haut à gauche sous le coin du compteur d'images
         // (loin des pouces en jeu) : l'icône montre le mode actuel.

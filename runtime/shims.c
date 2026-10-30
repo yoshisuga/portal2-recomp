@@ -1,4 +1,5 @@
 #include "rt.h"
+#include "modules.h"
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -60,12 +61,31 @@ static void core_memset(CPU *c) {
     uint32_t a = arg(c, 0), b = arg(c, 1), n = arg(c, 2);
     memset(rt_write_span(c, a, n), (int)b, n); c->eax = a;
 }
+// Half-Life 2, shaderapidx9.so : la commande différée « une constante de pixel »
+// (memcpy appelé en +0x273ed) envoie 16 octets depuis un Vector de 12 (état
+// dynamique +0xd5c) ; w est le champ suivant. Sous Linux natif, des octets
+// sans conséquence ; ici, une adresse de pile invitée (0x707f…, 3e29 en
+// flottant) ou d'autres restes, lus par certains shaders comme couleur de la
+// 4e lumière : surfaces saturées en magenta/jaune selon l'exécution. w = 0.
+static int vector_constant_copy(CPU *c, uint32_t n) {
+    static const GuestModule *module;
+    static uint32_t site;   // adresse de retour attendue, une fois le code reconnu
+    if (n != 16) return 0;
+    if (!site) {   // shaderapidx9 chargé après les premiers memcpy (ou autre jeu) : revérifié
+        static const uint8_t code[] = {0x01, 0xc8, 0x50, 0x89, 0x55, 0xd0, 0xe8};   // add, push, mov, call memcpy
+        if (!module) module = rt_find_module("shaderapidx9.so");
+        if (!module || memcmp(M + module->base + 0x273e7, code, sizeof(code))) return 0;
+        site = module->base + 0x273f2;
+    }
+    return R32(c->esp) == site;
+}
 static void core_memmove(CPU *c) {
     uint32_t a = arg(c, 0), b = arg(c, 1), n = arg(c, 2);
     void *dst = rt_write_span(c, a, n); void *src = rt_span(c, b, n);
     // memmove also gives a deterministic result for overlapping memcpy;
     // conforming callers must not rely on that extension.
     memmove(dst, src, n); c->eax = a;
+    if (vector_constant_copy(c, n)) memset((uint8_t *)dst + 12, 0, 4);
 }
 static void core_memcmp(CPU *c) {
     uint32_t a = arg(c, 0), b = arg(c, 1), n = arg(c, 2);

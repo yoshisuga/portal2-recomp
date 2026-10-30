@@ -329,6 +329,36 @@ static int gl_execute(CPU *c, const char *name, const RtGlEntry *entry, void *fn
     if (kind != GL_KIND_OTHER && stream_enabled() && stream_before(c, kind)) return 1;
     if (__builtin_expect(blit_trace_start != -1, 0)) trace_gl(c, name);
     if (__builtin_expect(pass_state == 2, 0)) pass_trace(c, name);
+    // P2_TEX_TRACE=1 : chaque combinaison (interne, format, type) de glTexImage2D, une fois.
+    static int tex_trace = -1;
+    if (__builtin_expect(tex_trace, 0)) {
+        if (tex_trace < 0) tex_trace = getenv("P2_TEX_TRACE") != NULL;
+        if (tex_trace && !strcmp(name, "glTexImage2D")) {
+            static uint32_t seen[64][3]; static int nseen;
+            uint32_t key[3] = {R32(c->esp + 12), R32(c->esp + 28), R32(c->esp + 32)}, w = R32(c->esp + 16), h = R32(c->esp + 20);
+            int known = 0;
+            for (int k = 0; k < nseen; ++k) known |= !memcmp(seen[k], key, sizeof(key));
+            if (!known && nseen < 64) {
+                memcpy(seen[nseen++], key, sizeof(key));
+                fprintf(stderr, "[tex] glTexImage2D interne %#x format %#x type %#x (%ux%u)\n", key[0], key[1], key[2], w, h);
+            }
+        }
+    }
+    // P2_UNIFORM_TRACE=N : valeurs de glUniform4fv hors de ±N (Mac et iOS, à comparer).
+    static float uniform_limit = -1;
+    if (__builtin_expect(uniform_limit != 0, 0)) {
+        if (uniform_limit < 0) { const char *e = getenv("P2_UNIFORM_TRACE"); uniform_limit = e ? (float)atof(e) : 0; }
+        if (uniform_limit > 0 && strstr(name, "Uniform4fv")) {
+            static int reported;
+            uint32_t location = R32(c->esp + 4), count = R32(c->esp + 8), data = R32(c->esp + 12);
+            for (uint32_t i = 0; i < count && reported < 3000; ++i) {
+                float v[4]; memcpy(v, M + data + i * 16, 16);
+                int odd = 0;
+                for (int k = 0; k < 4; ++k) odd |= v[k] != v[k] || v[k] > uniform_limit || v[k] < -uniform_limit;
+                if (odd) ++reported, fprintf(stderr, "[unif] %u+%u : %g %g %g %g\n", location, i, v[0], v[1], v[2], v[3]);
+            }
+        }
+    }
     int handled;
     if (__builtin_expect(!gl_timing(), 1)) handled = entry->thunk(c, fn);
     else {
