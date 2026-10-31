@@ -114,7 +114,15 @@ Uint32 rt_ios_get_mouse_state(int *x, int *y) {
     if (y) *y = up(py);
     return buttons;
 }
-void rt_ios_warp_mouse_in_window(SDL_Window *window, int x, int y) { SDL_WarpMouseInWindow(window, down(x), down(y)); }
+// Dans les menus, le jeu recentre le curseur juste après l'appui d'un toucher :
+// le relâchement tombait au centre de l'écran, hors de l'élément (« Charger une
+// partie » sélectionné puis abandonné). Le curseur y suit le doigt : pas de
+// recentrage tant que l'interface du jeu est affichée.
+int rt_ios_game_ui_visible(void);   // game_state.c
+void rt_ios_warp_mouse_in_window(SDL_Window *window, int x, int y) {
+    if (rt_ios_game_ui_visible()) return;
+    SDL_WarpMouseInWindow(window, down(x), down(y));
+}
 
 // Toucher dans les menus : SDL envoie déplacement, appui et souvent relâchement
 // dans la même image, et les listes du jeu (menu pause : « Reprendre la partie »…)
@@ -192,6 +200,24 @@ int rt_ios_poll_event(SDL_Event *event) {
     rt_ios_game_state_poll();   // menus/chargement ou partie (game_state.c), pour les commandes tactiles
     int got = poll_paced(event);
     if (got && event) trace_window_event(event);
+    // P2_IOS_MOUSE_TRACE=1 : événements souris et doigts livrés au jeu, avec l'image.
+    static int mouse_trace = -1;
+    if (mouse_trace < 0) mouse_trace = getenv("P2_IOS_MOUSE_TRACE") != NULL;
+    if (mouse_trace && got && event) {
+        extern unsigned long rt_ios_frames;
+        const SDL_Event *e = event;
+        if (e->type == SDL_MOUSEMOTION)
+            fprintf(stderr, "[souris] image %lu déplacement %d,%d (%+d,%+d) de %u\n", rt_ios_frames, e->motion.x, e->motion.y,
+                    e->motion.xrel, e->motion.yrel, e->motion.which);
+        else if (is_button(e))
+            fprintf(stderr, "[souris] image %lu bouton %d %s %d,%d de %u\n", rt_ios_frames, e->button.button,
+                    e->type == SDL_MOUSEBUTTONDOWN ? "appui" : "relâché", e->button.x, e->button.y, e->button.which);
+        else if (e->type == SDL_FINGERDOWN || e->type == SDL_FINGERUP || e->type == SDL_FINGERMOTION)
+            fprintf(stderr, "[souris] image %lu doigt %s %.3f,%.3f\n", rt_ios_frames,
+                    e->type == SDL_FINGERDOWN ? "posé" : e->type == SDL_FINGERUP ? "levé" : "glissé", e->tfinger.x, e->tfinger.y);
+        else if (e->type == SDL_CONTROLLERAXISMOTION || e->type == SDL_JOYAXISMOTION || e->type == SDL_CONTROLLERBUTTONDOWN)
+            fprintf(stderr, "[souris] image %lu manette type %#x\n", rt_ios_frames, e->type);
+    }
     if (got && event && event->type == SDL_WINDOWEVENT &&
         (event->window.event == SDL_WINDOWEVENT_RESIZED || event->window.event == SDL_WINDOWEVENT_SIZE_CHANGED))
         view_size(SDL_GetWindowFromID(event->window.windowID), &event->window.data1, &event->window.data2);

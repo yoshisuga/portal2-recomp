@@ -56,11 +56,11 @@ void rt_ios_move_response_linear(int on);
 int rt_ios_move_response(void);
 void rt_ios_console_command(const char *name);   // game_state.c
 
-typedef enum { ROLE_MOVE, ROLE_LOOK, ROLE_BUTTON } Role;
+typedef enum { ROLE_MOVE, ROLE_LOOK, ROLE_BUTTON, ROLE_DRAG } Role;
 typedef enum { KEY_SPACE, KEY_CTRL, KEY_E, KEY_ESCAPE, MOUSE_LEFT, MOUSE_RIGHT, LOOK_MODE, GYRO_MODE,
-               KEY_R, KEY_F, KEY_Q, KEY_SHIFT, WHEEL_NEXT, ACTION_COUNT } Action;
+               KEY_R, KEY_F, KEY_Q, KEY_SHIFT, WHEEL_NEXT, QUICK_SAVE, QUICK_LOAD, KEY_Z, EDIT_LAYOUT, ACTION_COUNT } Action;
 typedef struct { Action action; NSString *symbol; UIColor *color; CGPoint at; CGFloat size; } Button;
-enum { MAX_BUTTONS = 16 };
+enum { MAX_BUTTONS = 18 };
 
 // Manette virtuelle : deux axes seulement (stick gauche), aucun bouton, pour
 // qu'elle ne porte aucune autre commande que le déplacement.
@@ -89,6 +89,7 @@ static const CGFloat kButtonSize = 54, kPortalSize = 60;
 static const float kStickLook = 90;      // comptes de souris par image, stick à fond (≈ 360°/s à la sensibilité 3 du jeu)
 static const float kTrackpadLook = 3.5f; // comptes de souris par point de glissement
 static NSString *const kTrackpadKey = @"P2TouchTrackpad";
+static NSString *const kLayoutKey = @"P2TouchLayout";   // déplacements des boutons (points), par action
 static NSString *const kGyroOnKey = @"P2GyroOn";   // bouton de la surcouche (la sensibilité vient de P2_GYRO)
 static float look_speed(void) {
     static float speed;
@@ -338,6 +339,7 @@ static void backtap_touch(NSSet<UITouch *> *touches) {
 // Doigt suivi : rôle, action (bouton), point de départ, dernier point.
 @interface P2Finger : NSObject
 @property Role role; @property Action action; @property CGPoint start, at;
+@property CGPoint origin;   // déplacement du bouton saisi (disposition)
 @property NSTimeInterval stamp; @property double speed;   // trackpad : horodatage, vitesse lissée (pt/s)
 @end
 @implementation P2Finger
@@ -373,6 +375,10 @@ static void backtap_touch(NSSet<UITouch *> *touches) {
     int backtapHeld;          // tape au dos : bouton enfoncé (Action), -1 aucun
     CFTimeInterval backtapAt; // tape au dos : instant de l'appui
     unsigned long backtapFrames; // tape au dos : images présentées à l'appui
+    CFTimeInterval longPressAt[ACTION_COUNT]; // appui long (sauvegarde rapide…) : début, 0 aucun
+    NSTimer *longPressTick;   // progression de l'appui long, redessinée à chaque image
+    BOOL editing;             // disposition : les boutons se déplacent au doigt, sans agir
+    NSMutableDictionary<NSString *, NSArray<NSNumber *> *> *layout;   // action -> déplacement {dx, dy}
 }
 
 - (instancetype)initWithWindow:(SDL_Window *)sdlWindow {
@@ -391,6 +397,8 @@ static void backtap_touch(NSSet<UITouch *> *touches) {
         trackpad = saved ? [saved boolValue] : YES;
         saved = [NSUserDefaults.standardUserDefaults objectForKey:kGyroOnKey];
         gyroOn = saved ? [saved boolValue] : YES;
+        NSDictionary *savedLayout = [NSUserDefaults.standardUserDefaults dictionaryForKey:kLayoutKey];
+        layout = savedLayout ? [savedLayout mutableCopy] : [NSMutableDictionary dictionary];
         NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
         for (NSNotificationName name in @[GCControllerDidConnectNotification, GCControllerDidDisconnectNotification,
                                           GCKeyboardDidConnectNotification, GCKeyboardDidDisconnectNotification])
@@ -426,7 +434,7 @@ static void backtap_touch(NSSet<UITouch *> *touches) {
     BOOL ui = rt_ios_game_ui_visible() != 0;
     if (ui != menu) {
         menu = ui;
-        if (menu) [self releaseAll];
+        if (menu) [self setEditing:NO], [self releaseAll];
         redraw(self);
     }
     [self updateFPS];
@@ -533,6 +541,7 @@ static void backtap_touch(NSSet<UITouch *> *touches) {
     SDL_PushEvent(&e);
 }
 - (void)action:(Action)action down:(BOOL)down {
+    if (editing && down) return;   // disposition : aucun bouton n'agit
     int before = held[action];
     held[action] = MAX(0, held[action] + (down ? 1 : -1));
     if ((before > 0) == (held[action] > 0)) return;
@@ -544,6 +553,7 @@ static void backtap_touch(NSSet<UITouch *> *touches) {
     case KEY_ESCAPE: [self key:SDL_SCANCODE_ESCAPE down:down]; break;
     case KEY_R: [self key:SDL_SCANCODE_R down:down]; break;          // recharger
     case KEY_F: [self key:SDL_SCANCODE_F down:down]; break;          // lampe torche
+    case KEY_Z: [self key:SDL_SCANCODE_Z down:down]; break;          // zoom de la combinaison (+zoom)
     case KEY_Q: [self key:SDL_SCANCODE_Q down:down]; break;          // arme précédente (lastinv)
     case KEY_SHIFT: [self key:SDL_SCANCODE_LSHIFT down:down]; break; // sprint
     case WHEEL_NEXT:                                                 // arme suivante (invnext)
@@ -556,10 +566,38 @@ static void backtap_touch(NSSet<UITouch *> *touches) {
         break;
     case MOUSE_LEFT: [self mouseButton:SDL_BUTTON_LEFT down:down at:centre]; break;
     case MOUSE_RIGHT: [self mouseButton:SDL_BUTTON_RIGHT down:down at:centre]; break;
+    case QUICK_SAVE: case QUICK_LOAD: [self longPress:action down:down]; break;
     case LOOK_MODE: if (down) [self toggleLookMode]; break;
     case GYRO_MODE: if (down) [self toggleGyro]; break;
     default: break;
     }
+}
+// Sauvegarde et chargement rapides : appui long (kLongPress), anneau de
+// progression autour du bouton ; touches F6 et F9 (liaisons par défaut du jeu).
+static const CFTimeInterval kLongPress = .8;
+- (void)longPress:(Action)action down:(BOOL)down {
+    longPressAt[action] = down ? CACurrentMediaTime() : 0;
+    if (down && !longPressTick)
+        longPressTick = [NSTimer scheduledTimerWithTimeInterval:1. / 60 target:self selector:@selector(longPressStep)
+                                                       userInfo:nil repeats:YES];
+    redraw(self);
+}
+- (CGFloat)longPressProgress:(Action)action {
+    return longPressAt[action] > 0 ? MIN(1, (CACurrentMediaTime() - longPressAt[action]) / kLongPress) : 0;
+}
+- (void)longPressStep {
+    BOOL pending = NO;
+    for (Action a = QUICK_SAVE; a <= QUICK_LOAD; ++a) {
+        if (longPressAt[a] <= 0) continue;
+        if ([self longPressProgress:a] < 1) { pending = YES; continue; }
+        longPressAt[a] = -1;   // fait : rien d'autre avant le relâchement
+        SDL_Scancode code = a == QUICK_SAVE ? SDL_SCANCODE_F6 : SDL_SCANCODE_F9;
+        [self key:code down:YES]; [self key:code down:NO];
+        UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+        [haptic impactOccurred];
+    }
+    if (!pending) { [longPressTick invalidate]; longPressTick = nil; }
+    redraw(self);
 }
 - (void)setDirections:(const BOOL *)wanted {
     static const SDL_Scancode codes[4] = {SDL_SCANCODE_W, SDL_SCANCODE_A, SDL_SCANCODE_S, SDL_SCANCODE_D};
@@ -569,7 +607,7 @@ static void backtap_touch(NSSet<UITouch *> *touches) {
 
 // ---- disposition (points, dans la zone sûre) ----
 - (CGRect)area { return UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets); }
-- (CGFloat)stickRadius { return MIN(66, self.area.size.height * .15); }
+- (CGFloat)stickRadius { return MIN(84, self.area.size.height * .19); }
 - (CGPoint)restingStick:(BOOL)right {
     CGRect a = self.area;
     // Droite : à gauche de l'éventail de boutons (arc, plus bas).
@@ -588,18 +626,26 @@ static CGPoint arc(CGPoint center, CGFloat radius, CGFloat degrees) {
     CGFloat t = degrees * (CGFloat)M_PI / 180;
     return CGPointMake(center.x + radius * cos(t), center.y - radius * sin(t));
 }
-- (int)buttons:(Button *)b {
+- (int)buttons:(Button *)b { return [self buttons:b moved:YES]; }
+- (int)buttons:(Button *)b moved:(BOOL)moved {
     CGRect a = self.area; CGFloat x = CGRectGetMinX(a), y = CGRectGetMinY(a), w = a.size.width;
     UIColor *blue = [UIColor colorWithRed:.16 green:.55 blue:1 alpha:.6], *orange = [UIColor colorWithRed:1 green:.55 blue:.05 alpha:.6];
     UIColor *ink = [UIColor colorWithWhite:0 alpha:.35];   // fond sombre : icônes lisibles sur un mur clair
+#if RT_GAME_HL2
+    CGFloat main = kPortalSize * 1.5;   // tir : la cible la plus utilisée, en grand
+#else
     CGFloat main = kPortalSize * 1.1;
-    CGPoint corner = CGPointMake(CGRectGetMaxX(a) - main * .5 - 14, CGRectGetMaxY(a) - main * .5 - 16);
+#endif
+    // Coin du tir : 16 pt dans la marge sûre de droite (vide en bas, l'encoche est
+    // au milieu du bord), sans sortir de l'écran ; le jeu garde plus de place.
+    CGFloat right = MIN(CGRectGetMaxX(a) + 16, CGRectGetMaxX(self.bounds) - 6);
+    CGPoint corner = CGPointMake(right - main * .5, CGRectGetMaxY(a) - main * .5 - 16);
     CGFloat inner = main * .5 + kButtonSize * .5 + 46, outer = inner + kButtonSize + 26;
     CGFloat toggles = CGRectGetMaxY([self fpsCorner]) + kButtonSize * .45 + 4;
 #if RT_GAME_HL2
     // Half-Life 2 : tir principal (grand, rouge) dans le coin, tir secondaire au
     // bout de l'anneau intérieur ; rechargement et armes sur l'anneau extérieur ;
-    // sprint au-dessus du stick ; lampe torche à gauche de la pause.
+    // sprint au-dessus du stick ; lampe torche au-dessus des armes, hors de la visée.
     (void)blue; (void)orange;
     UIColor *red = [UIColor colorWithRed:.85 green:.18 blue:.12 alpha:.6];
     Button all[] = {
@@ -611,8 +657,11 @@ static CGPoint arc(CGPoint center, CGFloat radius, CGFloat degrees) {
         {KEY_R, @"arrow.clockwise", ink, arc(corner, outer, 100), kButtonSize * .85},
         {WHEEL_NEXT, @"chevron.forward.2", ink, arc(corner, outer, 124), kButtonSize * .85},
         {KEY_Q, @"arrow.uturn.backward", ink, arc(corner, outer, 147), kButtonSize * .75},
+        {KEY_F, @"flashlight.on.fill", ink, arc(corner, outer + kButtonSize + 8, 112), kButtonSize * .85},   // au-dessus des armes
+        {KEY_Z, @"binoculars.fill", ink, arc(corner, outer + kButtonSize + 8, 132), kButtonSize * .85},
         {KEY_SHIFT, @"figure.run", ink, {x + w * .06, y + a.size.height * .40}, kButtonSize * .85},
-        {KEY_F, @"flashlight.on.fill", ink, {x + w - kButtonSize * 1.35, y + kButtonSize * .45}, kButtonSize * .75},
+        {QUICK_SAVE, @"square.and.arrow.down.fill", ink, {x + w - kButtonSize * 1.35, y + kButtonSize * .45}, kButtonSize * .75},
+        {QUICK_LOAD, @"arrow.counterclockwise", ink, {x + w - kButtonSize * 2.25, y + kButtonSize * .45}, kButtonSize * .75},
         {KEY_ESCAPE, @"pause.fill", ink, {x + w - kButtonSize * .45, y + kButtonSize * .45}, kButtonSize * .75},
         {LOOK_MODE, trackpad ? @"hand.draw.fill" : @"r.joystick.fill", ink,
          {x + kButtonSize * .45, toggles}, kButtonSize * .75},
@@ -645,12 +694,61 @@ static CGPoint arc(CGPoint center, CGFloat radius, CGFloat degrees) {
         if (all[i].action == GYRO_MODE && !(gyro_gain && backtap_motion)) continue;   // coupée, ou sans capteur
         b[n++] = all[i];
     }
+    // Disposition : bouton fixe à côté des bascules, qui ouvre et ferme le mode.
+    if (n < MAX_BUTTONS)
+        b[n++] = (Button){EDIT_LAYOUT, editing ? @"checkmark" : @"slider.horizontal.3", ink,
+                          {x + kButtonSize * 2.15, toggles}, kButtonSize * .75};
+    for (int i = 0; moved && i < n; ++i) {
+        NSArray<NSNumber *> *d = layout[@(b[i].action).stringValue];
+        if (d.count == 2) b[i].at = CGPointMake(b[i].at.x + d[0].doubleValue, b[i].at.y + d[1].doubleValue);
+    }
     return n;
+}
+- (CGPoint)defaultPosition:(Action)action {
+    Button b[MAX_BUTTONS]; int n = [self buttons:b moved:NO];
+    for (int i = 0; i < n; ++i) if (b[i].action == action) return b[i].at;
+    return CGPointZero;
+}
+- (CGFloat)sizeOf:(Action)action {
+    Button b[MAX_BUTTONS]; int n = [self buttons:b moved:NO];
+    for (int i = 0; i < n; ++i) if (b[i].action == action) return b[i].size;
+    return kButtonSize;
+}
+
+// ---- disposition des boutons ----
+// Bouton à glissières : mode où chaque bouton suit le doigt qui le saisit
+// (gardé dans les réglages, kLayoutKey) ; « Réinitialiser » remet la
+// disposition d'origine, « OK » ou le même bouton referment le mode.
+- (CGRect)editBar:(BOOL)reset {
+    CGFloat w = 150, h = 40, mid = CGRectGetMidX(self.bounds), top = CGRectGetMinY(self.area) + 8;
+    return CGRectMake(reset ? mid - w - 8 : mid + 8, top, w, h);
+}
+- (void)setEditing:(BOOL)on {
+    if (on == editing) return;
+    if (on) [self releaseAll];
+    editing = on;
+    if (!on) [NSUserDefaults.standardUserDefaults setObject:layout forKey:kLayoutKey];
+    redraw(self);
+}
+- (void)drag:(P2Finger *)f {
+    Action a = f.action;
+    CGPoint home = [self defaultPosition:a], want = CGPointMake(home.x + f.origin.x + f.at.x - f.start.x,
+                                                                 home.y + f.origin.y + f.at.y - f.start.y);
+    CGFloat half = [self sizeOf:a] / 2;
+    want.x = MIN(MAX(want.x, half), CGRectGetMaxX(self.bounds) - half);
+    want.y = MIN(MAX(want.y, half), CGRectGetMaxY(self.bounds) - half);
+    layout[@(a).stringValue] = @[@(want.x - home.x), @(want.y - home.y)];
 }
 - (int)buttonAt:(CGPoint)p {
     Button b[MAX_BUTTONS]; int n = [self buttons:b];
-    for (int i = 0; i < n; ++i) if (hypot(p.x - b[i].at.x, p.y - b[i].at.y) < b[i].size * .62) return (int)b[i].action;
-    return -1;
+    // Le plus proche dans une marge de 20 % autour du bouton : un pouce un peu à
+    // côté appuie quand même, sans prendre le voisin.
+    int best = -1; CGFloat closest = CGFLOAT_MAX;
+    for (int i = 0; i < n; ++i) {
+        CGFloat d = hypot(p.x - b[i].at.x, p.y - b[i].at.y);
+        if (d < b[i].size * .7 && d / b[i].size < closest) { closest = d / b[i].size; best = (int)b[i].action; }
+    }
+    return best;
 }
 
 // ---- doigts ----
@@ -811,6 +909,17 @@ static Sint16 axis_value(CGFloat speed, int response) {
             continue;
         }
         int button = [self buttonAt:f.start];
+        if (editing) {
+            if (CGRectContainsPoint([self editBar:YES], f.start)) { [layout removeAllObjects]; redraw(self); continue; }
+            if (CGRectContainsPoint([self editBar:NO], f.start) || button == EDIT_LAYOUT) { [self setEditing:NO]; continue; }
+            if (button < 0) continue;
+            NSArray<NSNumber *> *d = layout[@(button).stringValue];
+            f.role = ROLE_DRAG; f.action = (Action)button;
+            f.origin = d.count == 2 ? CGPointMake(d[0].doubleValue, d[1].doubleValue) : CGPointZero;
+            [fingers setObject:f forKey:t];
+            continue;
+        }
+        if (button == EDIT_LAYOUT) { [self setEditing:YES]; continue; }
         BOOL left = f.start.x < CGRectGetMidX(self.bounds);
         if (button >= 0) { f.role = ROLE_BUTTON; f.action = (Action)button; [self action:f.action down:YES]; }
         else if (left && ![self roleTaken:ROLE_MOVE]) f.role = ROLE_MOVE;
@@ -836,6 +945,13 @@ static Sint16 axis_value(CGFloat speed, int response) {
             [self lookBy:(float)dx * k y:(float)dy * k];
         }
         f.at = p;
+        if (f && f.role == ROLE_DRAG) [self drag:f];
+        // Stick de déplacement : au-delà du rayon, le centre suit le doigt (le
+        // stick reste sous le pouce au lieu de lui échapper).
+        if (f && f.role == ROLE_MOVE) {
+            CGFloat dx = p.x - f.start.x, dy = p.y - f.start.y, dist = hypot(dx, dy), r = self.stickRadius;
+            if (dist > r) f.start = CGPointMake(p.x - dx * r / dist, p.y - dy * r / dist);
+        }
     }
     [self updateMove]; redraw(self);
 }
@@ -845,6 +961,7 @@ static Sint16 axis_value(CGFloat speed, int response) {
     for (UITouch *t in touches) {
         P2Finger *f = [fingers objectForKey:t];
         if (f.role == ROLE_BUTTON) [self action:f.action down:NO];
+        if (f.role == ROLE_DRAG) [NSUserDefaults.standardUserDefaults setObject:layout forKey:kLayoutKey];
         [fingers removeObjectForKey:t];
     }
     [self updateMove]; redraw(self);
@@ -938,8 +1055,30 @@ static void draw_pixel_text(CGContextRef c, const char *text, CGPoint at) {
     CGContextRef c = UIGraphicsGetCurrentContext();
     UIColor *ink = [UIColor colorWithWhite:1 alpha:.3], *line = [UIColor colorWithWhite:1 alpha:.45];
     CGContextSetLineWidth(c, 2);
-    [self drawStick:c right:NO ink:ink];
-    if (!trackpad) [self drawStick:c right:YES ink:ink];
+    if (editing) {   // voile, consigne et boutons Réinitialiser / OK
+        CGContextSetFillColorWithColor(c, [UIColor colorWithWhite:0 alpha:.35].CGColor);
+        CGContextFillRect(c, self.bounds);
+        NSDictionary *font = @{NSFontAttributeName: [UIFont boldSystemFontOfSize:17],
+                               NSForegroundColorAttributeName: UIColor.whiteColor};
+        for (int i = 0; i < 2; ++i) {
+            CGRect r = [self editBar:i == 0];
+            UIBezierPath *pill = [UIBezierPath bezierPathWithRoundedRect:r cornerRadius:r.size.height / 2];
+            [(i == 0 ? [UIColor colorWithWhite:.25 alpha:.85] : [UIColor colorWithRed:.16 green:.55 blue:1 alpha:.9]) setFill];
+            [pill fill];
+            NSString *label = i == 0 ? @"Reset" : @"Done";
+            CGSize z = [label sizeWithAttributes:font];
+            [label drawAtPoint:CGPointMake(CGRectGetMidX(r) - z.width / 2, CGRectGetMidY(r) - z.height / 2) withAttributes:font];
+        }
+        NSString *hint = @"Drag buttons to move them";
+        NSDictionary *small = @{NSFontAttributeName: [UIFont systemFontOfSize:14],
+                                NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:.8]};
+        CGSize z = [hint sizeWithAttributes:small];
+        [hint drawAtPoint:CGPointMake(CGRectGetMidX(self.bounds) - z.width / 2, CGRectGetMaxY([self editBar:NO]) + 8)
+           withAttributes:small];
+    } else {
+        [self drawStick:c right:NO ink:ink];
+        if (!trackpad) [self drawStick:c right:YES ink:ink];
+    }
     Button b[MAX_BUTTONS]; int n = [self buttons:b];
     for (int i = 0; i < n; ++i) {
         CGFloat s = b[i].size;
@@ -947,6 +1086,22 @@ static void draw_pixel_text(CGContextRef c, const char *text, CGPoint at) {
         UIColor *fill = held[b[i].action] ? [b[i].color colorWithAlphaComponent:.9] : b[i].color;
         CGContextSetFillColorWithColor(c, fill.CGColor); CGContextFillEllipseInRect(c, box);
         CGContextSetStrokeColorWithColor(c, line.CGColor); CGContextStrokeEllipseInRect(c, box);
+        if (editing && b[i].action != EDIT_LAYOUT) {   // bouton déplaçable : contour pointillé
+            CGContextSaveGState(c);
+            CGFloat dash[] = {5, 4}; CGContextSetLineDash(c, 0, dash, 2);
+            CGContextSetStrokeColorWithColor(c, UIColor.whiteColor.CGColor);
+            CGContextStrokeEllipseInRect(c, CGRectInset(box, -4, -4));
+            CGContextRestoreGState(c);
+        }
+        CGFloat progress = [self longPressProgress:b[i].action];
+        if (progress > 0) {   // anneau d'appui long, depuis midi dans le sens horaire
+            CGContextSaveGState(c);
+            CGContextSetLineWidth(c, 4); CGContextSetLineCap(c, kCGLineCapRound);
+            CGContextSetStrokeColorWithColor(c, [UIColor colorWithWhite:1 alpha:.9].CGColor);
+            CGContextAddArc(c, b[i].at.x, b[i].at.y, s / 2 + 5, -M_PI_2, -M_PI_2 + 2 * M_PI * progress, 0);
+            CGContextStrokePath(c);
+            CGContextRestoreGState(c);
+        }
         if (!b[i].symbol) continue;
         UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:s * .38
                                                                                              weight:UIImageSymbolWeightBold];
