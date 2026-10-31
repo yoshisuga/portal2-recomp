@@ -66,7 +66,9 @@ static void core_memset(CPU *c) {
 // dynamique +0xd5c) ; w est le champ suivant. Sous Linux natif, des octets
 // sans conséquence ; ici, une adresse de pile invitée (0x707f…, 3e29 en
 // flottant) ou d'autres restes, lus par certains shaders comme couleur de la
-// 4e lumière : surfaces saturées en magenta/jaune selon l'exécution. w = 0.
+// 4e lumière : surfaces saturées en magenta/jaune selon l'exécution. w = 0,
+// seulement pour c20 (registre en -0x40(%ebp)) : les autres constantes envoyées
+// par ce chemin ont un vrai w (c12, alpha de modulation des décalques).
 static int vector_constant_copy(CPU *c, uint32_t n) {
     static const GuestModule *module;
     static uint32_t site;   // adresse de retour attendue, une fois le code reconnu
@@ -77,7 +79,13 @@ static int vector_constant_copy(CPU *c, uint32_t n) {
         if (!module || memcmp(M + module->base + 0x273e7, code, sizeof(code))) return 0;
         site = module->base + 0x273f2;
     }
-    return R32(c->esp) == site;
+    if (R32(c->esp) != site) return 0;
+    static int trace = -1;
+    if (trace < 0) trace = getenv("P2_CONSTANT_TRACE") != NULL;
+    static uint8_t seen[256];
+    uint32_t reg = R32(c->ebp - 0x40);
+    if (trace && reg < 256 && seen[reg] < 4) ++seen[reg], fprintf(stderr, "[constante] c%u w %#x\n", reg, R32(arg(c, 1) + 12));
+    return reg == 20;
 }
 static void core_memmove(CPU *c) {
     uint32_t a = arg(c, 0), b = arg(c, 1), n = arg(c, 2);

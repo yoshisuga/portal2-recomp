@@ -135,6 +135,23 @@ static void shader_source(GLuint shader, GLsizei count, const GLchar *const *str
             free(converted); converted = out;
         }
     }
+    // P2_IOS_DEBUG_SHADOW=r (essai) : shadow2D compare à la profondeur r au lieu de
+    // celle du shader (0 : toujours éclairé si la texture d'ombre est lisible).
+    // « z » : renvoie la profondeur de référence du shader (c.z).
+    if (converted && type == GL_FRAGMENT_SHADER && getenv("P2_IOS_DEBUG_SHADOW")) {
+        const char *from = "{ return vec4(texture(s, c)); }", *p = strstr(converted, from);
+        if (p) {
+            char to[96];
+            const char *r = getenv("P2_IOS_DEBUG_SHADOW");
+            if (*r == 'z') snprintf(to, sizeof(to), "{ return vec4(c.z); }");
+            else snprintf(to, sizeof(to), "{ return vec4(texture(s, vec3(c.xy, %s))); }", r);
+            char *out = malloc(strlen(converted) + strlen(to) + 1);
+            memcpy(out, converted, (size_t)(p - converted));
+            strcpy(out + (p - converted), to);
+            strcat(out, p + strlen(from));
+            free(converted); converted = out;
+        }
+    }
     // P2_IOS_DEBUG_ENV=1 : les shaders qui lisent une cubemap en unité 2 (reflets)
     // affichent l'échantillon brut de la cubemap (valeur/2, pour voir au-delà de 1).
     if (converted && type == GL_FRAGMENT_SHADER && getenv("P2_IOS_DEBUG_ENV") && strstr(converted, "uniform samplerCube sampler2;")) {
@@ -276,8 +293,15 @@ static GLint es3_internal(GLint internal, GLenum format, GLenum type) {
 static void (*es_tex_image_2d)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void *);
 static void (*es_tex_sub_image_2d)(GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void *);
 static void half_stats(const char *what, GLsizei w, GLsizei h, GLenum f, GLenum ty, const void *d);
+static GLint depth_textures[64];   // P2_IOS_SHADOW_TRACE : noms des textures de profondeur
+static int ndepth_textures;
 static void es3_tex_image_2d(GLenum t, GLint l, GLint i, GLsizei w, GLsizei h, GLint b, GLenum f, GLenum ty, const void *d) {
     es_tex_image_2d(t, l, es3_internal(i, f, ty), w, h, b, f, es3_type(ty), d);
+    if (f == GL_DEPTH_COMPONENT && t == GL_TEXTURE_2D && ndepth_textures < 64 && getenv("P2_IOS_SHADOW_TRACE")) {
+        GLint name = 0; real_get_integerv(GL_TEXTURE_BINDING_2D, &name);
+        depth_textures[ndepth_textures++] = name;
+        fprintf(stderr, "[ombre] texture de profondeur %d (%dx%d, interne %#x type %#x)\n", name, w, h, es3_internal(i, f, ty), ty);
+    }
     { const char *e = getenv("P2_IOS_GL_TRACE"); if (e && *e == '2') half_stats(t == GL_TEXTURE_2D ? "image" : "cube", w, h, f, ty, d); }
     static int all = -1;   // P2_IOS_GL_TRACE=2 : ce qu'OpenGL ES reçoit vraiment, niveau par niveau
     if (all < 0) { const char *e = getenv("P2_IOS_GL_TRACE"); all = e && *e == '2'; }
@@ -393,7 +417,76 @@ static void uniform4fv_traced(GLint location, GLsizei count, const GLfloat *v) {
         if (++reported > 3000) return;
     }
 }
+// P2_IOS_SHADOW_TRACE=1 : état réel de l'unité 7 (texture d'ombre de la lampe)
+// aux tracés des programmes qui ont un sampler7, une ligne par état distinct.
+static void (*es_draw_elements)(GLenum, GLsizei, GLenum, const void *);
+static void (*es_draw_range_elements)(GLenum, GLuint, GLuint, GLsizei, GLenum, const void *);
+static void shadow_state(void) {
+    static void (*gi)(GLenum, GLint *), (*gtp)(GLenum, GLenum, GLint *), (*at)(GLenum);
+    static GLint (*loc)(GLuint, const GLchar *);
+    static GLenum (*status)(GLenum);
+    static int seen[64][8], nseen;
+    if (!gi) gi = dlsym(gles, "glGetIntegerv"), gtp = dlsym(gles, "glGetTexParameteriv"), at = dlsym(gles, "glActiveTexture"),
+             loc = dlsym(gles, "glGetUniformLocation"), status = dlsym(gles, "glCheckFramebufferStatus");
+    GLint program = 0, active = 0;
+    gi(GL_CURRENT_PROGRAM, &program);
+    if (!program || loc(program, "sampler7") < 0) return;
+    int s[8] = {0};
+    gi(GL_ACTIVE_TEXTURE, &active);
+    at(GL_TEXTURE7);
+    gi(GL_TEXTURE_BINDING_2D, &s[0]);
+    gi(GL_SAMPLER_BINDING, &s[1]);
+    if (s[0]) {
+        gtp(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, &s[2]); gtp(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, &s[3]);
+        gtp(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &s[4]); gtp(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &s[5]);
+        gtp(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, &s[6]);
+    }
+    at(active);
+    s[7] = glGetError();
+    for (int k = 0; k < nseen; ++k) if (!memcmp(seen[k], s, sizeof(s))) return;
+    if (nseen < 64) memcpy(seen[nseen++], s, sizeof(s));
+    int depth = 0;
+    for (int k = 0; k < ndepth_textures; ++k) depth |= depth_textures[k] == s[0];
+    fprintf(stderr, "[ombre] programme %d unité 7 : texture %d%s sampler %d comparaison %#x %#x min %#x mag %#x max_level %d err %#x\n",
+            program, s[0], depth ? " (profondeur)" : "", s[1], s[2], s[3], s[4], s[5], s[6], s[7]);
+}
+// Erreur d'un tracé : programme, puis ses samplers (unité et type), une fois par programme.
+static void draw_error(void) {
+    GLenum err = glGetError();
+    if (!err) return;
+    static void (*gi)(GLenum, GLint *), (*gpi)(GLuint, GLenum, GLint *), (*gu)(GLuint, GLint, GLint *);
+    static void (*gau)(GLuint, GLuint, GLsizei, GLsizei *, GLint *, GLenum *, GLchar *);
+    static GLint (*loc)(GLuint, const GLchar *);
+    static GLint reported[256]; static int nreported;
+    if (!gi) gi = dlsym(gles, "glGetIntegerv"), gpi = dlsym(gles, "glGetProgramiv"), gu = dlsym(gles, "glGetUniformiv"),
+             gau = dlsym(gles, "glGetActiveUniform"), loc = dlsym(gles, "glGetUniformLocation");
+    GLint program = 0, count = 0;
+    gi(GL_CURRENT_PROGRAM, &program);
+    for (int k = 0; k < nreported; ++k) if (reported[k] == program) return;
+    if (nreported < 256) reported[nreported++] = program;
+    gpi(program, GL_ACTIVE_UNIFORMS, &count);
+    char line[1024]; int at = snprintf(line, sizeof(line), "[ombre] erreur %#x au tracé, programme %d :", err, program);
+    for (GLint u = 0; u < count && at < (int)sizeof(line) - 64; ++u) {
+        char name[64]; GLint size; GLenum type; GLsizei len;
+        gau(program, u, sizeof(name), &len, &size, &type, name);
+        if (type != GL_SAMPLER_2D && type != GL_SAMPLER_CUBE && type != GL_SAMPLER_3D && type != GL_SAMPLER_2D_SHADOW) continue;
+        GLint unit = -1; gu(program, loc(program, name), &unit);
+        at += snprintf(line + at, sizeof(line) - at, " %s=%d(%s)", name, unit,
+                       type == GL_SAMPLER_2D ? "2D" : type == GL_SAMPLER_CUBE ? "cube" : type == GL_SAMPLER_3D ? "3D" : "ombre");
+    }
+    fprintf(stderr, "%s\n", line);
+}
+static void draw_elements_traced(GLenum m, GLsizei n, GLenum t, const void *i) {
+    shadow_state(); glGetError(); es_draw_elements(m, n, t, i); draw_error();
+}
+static void draw_range_elements_traced(GLenum m, GLuint a, GLuint b, GLsizei n, GLenum t, const void *i) {
+    shadow_state(); glGetError(); es_draw_range_elements(m, a, b, n, t, i); draw_error();
+}
 static void *gles_function(const char *name) {
+    if (getenv("P2_IOS_SHADOW_TRACE")) {
+        if (!strcmp(name, "glDrawElements")) { es_draw_elements = dlsym(gles, name); return (void *)draw_elements_traced; }
+        if (!strcmp(name, "glDrawRangeElements")) { es_draw_range_elements = dlsym(gles, name); return (void *)draw_range_elements_traced; }
+    }
     if (!strcmp(name, "glUniform4fv") && getenv("P2_IOS_UNIFORM_TRACE")) {
         es_uniform4fv = dlsym(gles, name);
         return (void *)uniform4fv_traced;

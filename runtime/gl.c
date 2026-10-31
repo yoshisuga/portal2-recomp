@@ -343,6 +343,15 @@ static int gl_execute(CPU *c, const char *name, const RtGlEntry *entry, void *fn
                 fprintf(stderr, "[tex] glTexImage2D interne %#x format %#x type %#x (%ux%u)\n", key[0], key[1], key[2], w, h);
             }
         }
+        // Comparaison de profondeur et filtres (ombres de la lampe), les 200 premiers.
+        static int params, fbos;
+        if (tex_trace && (!strncmp(name, "glTexParameter", 14) || !strncmp(name, "glSamplerParameter", 18)) && params < 400) {
+            uint32_t pname = R32(c->esp + 8), value = R32(c->esp + 12);
+            if ((pname == 0x884c || pname == 0x884d) && value)
+                ++params, fprintf(stderr, "[tex] %s %#x %#x %#x\n", name, R32(c->esp + 4), pname, value);
+        }
+        if (tex_trace && (!strcmp(name, "glFramebufferTexture2D") || !strcmp(name, "glFramebufferTexture2DEXT")) && fbos < 200)
+            ++fbos, fprintf(stderr, "[tex] %s attache %#x cible %#x texture %u\n", name, R32(c->esp + 8), R32(c->esp + 12), R32(c->esp + 16));
     }
     // P2_UNIFORM_TRACE=N : valeurs de glUniform4fv hors de ±N (Mac et iOS, à comparer).
     static float uniform_limit = -1;
